@@ -6,13 +6,14 @@ import json
 import time
 import uuid
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 
 from .contracts import Contract, validate_value
+from .governance import PolicyDecision, PolicyEngine, PolicyViolation
 from .tracing import Tracer
 
 
@@ -23,6 +24,8 @@ class Step:
     name: str
     function: Callable[[Any], Any]
     contract: Contract | None = None
+    governed_action: str | None = None
+    policy_engine: PolicyEngine | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
@@ -31,9 +34,20 @@ class Step:
             raise TypeError("Step function must be callable.")
         if self.contract is not None and not isinstance(self.contract, Contract):
             raise TypeError("Step contract must be a Contract or None.")
+        if (self.governed_action is None) != (self.policy_engine is None):
+            raise ValueError("A governed step requires both an action and a policy engine.")
+        if self.governed_action is not None and not self.governed_action:
+            raise ValueError("A governed action must be a non-empty string.")
+
+    def with_governance(self, action: str, policy_engine: PolicyEngine) -> Step:
+        """Return a copy that checks ``action`` against ``policy_engine`` on execution."""
+        if not isinstance(policy_engine, PolicyEngine):
+            raise TypeError("policy_engine must be a PolicyEngine instance.")
+        return replace(self, governed_action=action, policy_engine=policy_engine)
 
     def execute(self, value: Any) -> Any:
         """Run the wrapped function with the output from the preceding step."""
+        self._check_governance()
         if self.contract is None:
             return self.function(value)
 
@@ -50,6 +64,13 @@ class Step:
             step_name=self.name,
             direction="output",
         )
+
+    def _check_governance(self) -> None:
+        if self.policy_engine is None or self.governed_action is None:
+            return
+        if self.policy_engine.check(self.governed_action) is PolicyDecision.REQUIRES_APPROVAL:
+            if not self.policy_engine.request_approval(self.governed_action):
+                raise PolicyViolation(self.name, self.governed_action)
 
 
 class Flow:
@@ -126,6 +147,9 @@ class Runtime:
                     input_value=value,
                     operation=lambda: step.execute(value),
                 )
+            except PolicyViolation:
+                # A denied approval is terminal; retrying cannot change it.
+                raise
             except Exception as error:
                 if attempt == self.max_retries + 1:
                     raise StepExecutionError(step.name, attempt, error) from error
