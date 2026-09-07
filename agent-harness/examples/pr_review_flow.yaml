@@ -1,0 +1,7 @@
+steps:
+  - name: read_diff
+    function: examples.stub_steps.read_diff
+  - name: review
+    function: examples.stub_steps.review
+  - name: comment
+    function: examples.stub_steps.comment

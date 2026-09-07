@@ -1,0 +1,9 @@
+steps:
+  - name: analyze
+    function: examples.stub_steps.analyze
+  - name: plan
+    function: examples.stub_steps.plan
+  - name: migrate
+    function: examples.stub_steps.migrate
+  - name: verify
+    function: examples.stub_steps.verify
