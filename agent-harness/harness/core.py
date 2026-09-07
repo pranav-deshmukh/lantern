@@ -10,6 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
+
+from .contracts import Contract, validate_value
+
 
 @dataclass(frozen=True)
 class Step:
@@ -17,16 +21,34 @@ class Step:
 
     name: str
     function: Callable[[Any], Any]
+    contract: Contract | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
             raise ValueError("Step name must be a non-empty string.")
         if not callable(self.function):
             raise TypeError("Step function must be callable.")
+        if self.contract is not None and not isinstance(self.contract, Contract):
+            raise TypeError("Step contract must be a Contract or None.")
 
     def execute(self, value: Any) -> Any:
         """Run the wrapped function with the output from the preceding step."""
-        return self.function(value)
+        if self.contract is None:
+            return self.function(value)
+
+        validated_input = validate_value(
+            value,
+            self.contract.input_model,
+            step_name=self.name,
+            direction="input",
+        )
+        output = self.function(validated_input)
+        return validate_value(
+            output,
+            self.contract.output_model,
+            step_name=self.name,
+            direction="output",
+        )
 
 
 class Flow:
@@ -153,9 +175,16 @@ class Runtime:
 
         try:
             with temporary_path.open("w", encoding="utf-8") as checkpoint_file:
-                json.dump(checkpoint, checkpoint_file)
+                json.dump(checkpoint, checkpoint_file, default=self._json_default)
             temporary_path.replace(self.checkpoint_path)
         except (OSError, TypeError) as error:
             raise RuntimeError(
                 f"Could not write checkpoint '{self.checkpoint_path}': {error}"
             ) from error
+
+    @staticmethod
+    def _json_default(value: Any) -> Any:
+        """Serialize Pydantic outputs while retaining ordinary JSON behavior."""
+        if isinstance(value, BaseModel):
+            return value.model_dump(mode="json")
+        raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
