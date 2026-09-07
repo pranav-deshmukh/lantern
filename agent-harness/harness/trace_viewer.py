@@ -8,16 +8,23 @@ from pathlib import Path
 from typing import Any
 
 
-def print_trace(trace_path: str | Path) -> None:
-    """Print a concise, grouped summary of the trace records in ``trace_path``."""
-    runs: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
-
+def load_traces(trace_path: str | Path) -> list[dict[str, Any]]:
+    """Read a JSONL trace file and return its records in file order."""
+    records: list[dict[str, Any]] = []
     with Path(trace_path).open("r", encoding="utf-8") as trace_file:
         for line in trace_file:
             if not line.strip():
                 continue
-            record = json.loads(line)
-            runs.setdefault(record["run_id"], []).append(record)
+            records.append(json.loads(line))
+    return records
+
+
+def print_trace(trace_path: str | Path) -> None:
+    """Print a concise, grouped summary of the trace records in ``trace_path``."""
+    runs: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
+
+    for record in load_traces(trace_path):
+        runs.setdefault(record["run_id"], []).append(record)
 
     for run_id, records in runs.items():
         print(f"Run {run_id}")
