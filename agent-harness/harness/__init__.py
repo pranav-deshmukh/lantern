@@ -2,6 +2,7 @@
 
 from .contracts import Contract, ContractViolationError
 from .core import Flow, Runtime, Step, StepExecutionError
+from .tracing import Tracer
 
 __all__ = [
     "Contract",
@@ -10,4 +11,5 @@ __all__ = [
     "Runtime",
     "Step",
     "StepExecutionError",
+    "Tracer",
 ]

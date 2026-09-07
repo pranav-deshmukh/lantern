@@ -13,6 +13,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from .contracts import Contract, validate_value
+from .tracing import Tracer
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,7 @@ class Runtime:
         max_retries: int = 2,
         retry_delay: float = 0.05,
         checkpoint_path: str | Path = ".harness_checkpoint.json",
+        trace_path: str | Path | None = None,
         run_id: str | None = None,
     ) -> None:
         if max_retries < 0:
@@ -98,6 +100,7 @@ class Runtime:
         self.retry_delay = retry_delay
         self.checkpoint_path = Path(checkpoint_path)
         self.run_id = run_id or str(uuid.uuid4())
+        self.tracer = Tracer(trace_path)
 
     def run(self, flow: Flow, initial_input: Any) -> Any:
         """Run ``flow`` from its start or resume it from this runtime's checkpoint."""
@@ -117,7 +120,12 @@ class Runtime:
         """Execute one step, allowing the initial attempt plus max_retries retries."""
         for attempt in range(1, self.max_retries + 2):
             try:
-                return step.execute(value)
+                return self.tracer.execute(
+                    run_id=self.run_id,
+                    step_name=step.name,
+                    input_value=value,
+                    operation=lambda: step.execute(value),
+                )
             except Exception as error:
                 if attempt == self.max_retries + 1:
                     raise StepExecutionError(step.name, attempt, error) from error
