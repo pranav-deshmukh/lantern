@@ -147,7 +147,14 @@ class Runtime:
         if "output" not in checkpoint:
             raise ValueError("Checkpoint is missing the previous step output.")
 
-        return step_index + 1, checkpoint["output"]
+        output = checkpoint["output"]
+        completed_step = flow.steps[step_index]
+        if completed_step.contract is not None:
+            # Checkpoints store models as JSON objects. Rebuild the same Pydantic
+            # output object that the next step would receive during a live run.
+            output = completed_step.contract.output_model.model_validate(output)
+
+        return step_index + 1, output
 
     def _read_checkpoint(self) -> dict[str, Any]:
         try:

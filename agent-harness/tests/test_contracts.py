@@ -88,3 +88,43 @@ def test_compatible_contracts_run_end_to_end_in_a_flow(tmp_path: Path) -> None:
     result = runtime.run(Flow([first_step, second_step]), {"value": 3})
 
     assert result == SecondOutput(message="value=6")
+
+
+def test_resume_rehydrates_a_contracted_step_output_for_an_uncontracted_step(
+    tmp_path: Path,
+) -> None:
+    class DoubledOutput(BaseModel):
+        doubled: int
+
+    class SimulatedCrash(BaseException):
+        """Represents an interruption after the first step has checkpointed."""
+
+    calls = {"first": 0, "second": 0}
+    should_crash = {"value": True}
+
+    def double(data: NumberInput) -> dict[str, int]:
+        calls["first"] += 1
+        return {"doubled": data.value * 2}
+
+    def use_attribute(data: DoubledOutput) -> int:
+        calls["second"] += 1
+        if should_crash["value"]:
+            should_crash["value"] = False
+            raise SimulatedCrash("stop after the first completed step")
+        return data.doubled + 1
+
+    flow = Flow(
+        [
+            Step("double", double, contract=Contract(NumberInput, DoubledOutput)),
+            Step("use-attribute", use_attribute),
+        ]
+    )
+    runtime = Runtime(
+        checkpoint_path=tmp_path / "checkpoint.json", run_id="rehydrate", retry_delay=0
+    )
+
+    with pytest.raises(SimulatedCrash):
+        runtime.run(flow, {"value": 3})
+
+    assert runtime.run(flow, {"value": 3}) == 7
+    assert calls == {"first": 1, "second": 2}
