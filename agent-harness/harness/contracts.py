@@ -2,10 +2,21 @@
 
 from __future__ import annotations
 
+import types
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Union, get_origin
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
+
+
+def is_base_model_type(model: Any) -> bool:
+    """Return whether ``model`` is a Pydantic ``BaseModel`` subclass."""
+    return isinstance(model, type) and issubclass(model, BaseModel)
+
+
+def is_union_type(model: Any) -> bool:
+    """Return whether ``model`` is a typing ``Union`` of multiple types."""
+    return get_origin(model) is Union or isinstance(model, types.UnionType)
 
 
 @dataclass(frozen=True)
@@ -13,15 +24,17 @@ class Contract:
     """The Pydantic models that define a step's input and output shapes."""
 
     input_model: type[BaseModel]
-    output_model: type[BaseModel]
+    output_model: Any
 
     def __post_init__(self) -> None:
-        for field_name, model in (
-            ("input_model", self.input_model),
-            ("output_model", self.output_model),
+        if not is_base_model_type(self.input_model):
+            raise TypeError("input_model must be a Pydantic BaseModel subclass.")
+        if not is_base_model_type(self.output_model) and not is_union_type(
+            self.output_model
         ):
-            if not isinstance(model, type) or not issubclass(model, BaseModel):
-                raise TypeError(f"{field_name} must be a Pydantic BaseModel subclass.")
+            raise TypeError(
+                "output_model must be a Pydantic BaseModel subclass or a Union of them."
+            )
 
 
 class ContractViolationError(ValueError):
@@ -38,13 +51,17 @@ class ContractViolationError(ValueError):
 
 def validate_value(
     value: Any,
-    model: type[BaseModel],
+    model: Any,
     *,
     step_name: str,
     direction: str,
-) -> BaseModel:
-    """Validate a value and add step context to Pydantic validation errors."""
+) -> Any:
+    """Validate a value and add step context to Pydantic validation errors.
+
+    ``model`` may be a ``BaseModel`` subclass or a ``Union`` (which can include
+    dataclasses such as :class:`Goto`); ``TypeAdapter`` validates both.
+    """
     try:
-        return model.model_validate(value)
+        return TypeAdapter(model).validate_python(value)
     except ValidationError as error:
         raise ContractViolationError(step_name, direction, error) from error

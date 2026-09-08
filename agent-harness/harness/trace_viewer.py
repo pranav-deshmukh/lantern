@@ -32,7 +32,7 @@ def print_trace(trace_path: str | Path) -> None:
         for record in records:
             duration = record["duration_ms"]
             total_duration += duration
-            status = "✓" if record["succeeded"] else "✗"
+            status = "OK" if record["succeeded"] else "FAIL"
             print(f"  {status} {record['step_name']} ({duration:.3f} ms)")
             if record["error"]:
                 print(f"    {record['error']}")

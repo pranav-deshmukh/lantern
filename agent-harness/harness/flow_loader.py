@@ -7,9 +7,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel
 
-from .contracts import Contract
+from .contracts import Contract, is_base_model_type, is_union_type
 from .core import Flow, Step
 from .governance import ApprovalCallback, PolicyEngine, PolicyRule
 
@@ -173,8 +172,12 @@ def _build_contract(raw_step: dict[str, Any], name: str, path: Path) -> Contract
             "and 'output_model' or neither."
         )
 
-    input_model = _import_model(input_model_path, path, name, "input_model")
-    output_model = _import_model(output_model_path, path, name, "output_model")
+    input_model = _import_model(
+        input_model_path, path, name, "input_model", allow_union=False
+    )
+    output_model = _import_model(
+        output_model_path, path, name, "output_model", allow_union=True
+    )
 
     try:
         return Contract(input_model, output_model)
@@ -189,15 +192,23 @@ def _import_model(
     path: Path,
     step_name: str,
     kind: str,
-) -> type[BaseModel]:
-    """Import and validate a Pydantic model from a dotted path."""
+    *,
+    allow_union: bool = False,
+) -> Any:
+    """Import and validate a Pydantic model (or Union) from a dotted path."""
     if not isinstance(dotted_path, str) or not dotted_path:
         raise FlowLoadError(
             f"Flow file '{path}' step '{step_name}' {kind} must be a dotted path string."
         )
 
     model = _import_dotted(dotted_path, path=path, step_name=step_name, kind=kind)
-    if not isinstance(model, type) or not issubclass(model, BaseModel):
+    valid = is_base_model_type(model) or (allow_union and is_union_type(model))
+    if not valid:
+        if allow_union:
+            raise FlowLoadError(
+                f"Flow file '{path}' step '{step_name}' {kind} '{dotted_path}' "
+                "is not a Pydantic BaseModel subclass or a Union of them."
+            )
         raise FlowLoadError(
             f"Flow file '{path}' step '{step_name}' {kind} '{dotted_path}' "
             "is not a Pydantic BaseModel subclass."

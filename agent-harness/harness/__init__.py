@@ -1,7 +1,15 @@
 """Public API for the minimal multi-step execution engine."""
 
 from .contracts import Contract, ContractViolationError
-from .core import Flow, Runtime, Step, StepExecutionError
+from .core import (
+    Flow,
+    GotoTargetError,
+    MaxJumpsExceeded,
+    Runtime,
+    Step,
+    StepExecutionError,
+)
+from .routing import Goto
 from .flow_loader import FlowLoadError, load_flow
 from .governance import PolicyDecision, PolicyEngine, PolicyRule, PolicyViolation
 from .anomaly import Baseline, find_anomalies
@@ -14,6 +22,9 @@ __all__ = [
     "ContractViolationError",
     "Flow",
     "FlowLoadError",
+    "Goto",
+    "GotoTargetError",
+    "MaxJumpsExceeded",
     "PolicyDecision",
     "PolicyEngine",
     "PolicyRule",

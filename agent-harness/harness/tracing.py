@@ -11,6 +11,8 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
+from .routing import Goto
+
 
 Result = TypeVar("Result")
 
@@ -29,6 +31,8 @@ class Tracer:
         step_name: str,
         input_value: Any,
         operation: Callable[[], Result],
+        reached_via_jump: bool = False,
+        jumped_from: str | None = None,
     ) -> Result:
         """Run an operation and persist a trace record whether it succeeds or fails."""
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -46,6 +50,8 @@ class Tracer:
                 duration_ms=self._duration_ms(started_at),
                 succeeded=False,
                 error_message=f"{type(error).__name__}: {error}",
+                reached_via_jump=reached_via_jump,
+                jumped_from=jumped_from,
             )
             raise
 
@@ -58,6 +64,8 @@ class Tracer:
             duration_ms=self._duration_ms(started_at),
             succeeded=True,
             error_message=None,
+            reached_via_jump=reached_via_jump,
+            jumped_from=jumped_from,
         )
         return output
 
@@ -72,6 +80,8 @@ class Tracer:
         duration_ms: float,
         succeeded: bool,
         error_message: str | None,
+        reached_via_jump: bool,
+        jumped_from: str | None,
     ) -> None:
         record = {
             "run_id": run_id,
@@ -82,6 +92,8 @@ class Tracer:
             "timestamp": timestamp,
             "succeeded": succeeded,
             "error": error_message,
+            "reached_via_jump": reached_via_jump,
+            "jumped_from": jumped_from,
         }
         self.records.append(record)
 
@@ -104,4 +116,9 @@ class Tracer:
     def _json_default(value: Any) -> Any:
         if isinstance(value, BaseModel):
             return value.model_dump(mode="json")
+        if isinstance(value, Goto):
+            return {
+                "target_step_name": value.target_step_name,
+                "payload": value.payload,
+            }
         return repr(value)
