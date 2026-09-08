@@ -24,6 +24,7 @@ dist/
 # Runtime state
 .harness_checkpoint.json
 .harness_checkpoint.json.tmp
+examples/summarize_trace.jsonl
 
 # Editor and OS files
 .vscode/

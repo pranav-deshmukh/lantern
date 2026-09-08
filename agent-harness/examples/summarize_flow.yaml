@@ -1,0 +1,9 @@
+steps:
+  - name: read_input
+    function: examples.llm_stub_steps.read_input
+    input_model: examples.llm_stub_steps.TextInput
+    output_model: examples.llm_stub_steps.TextInput
+  - name: summarize
+    function: examples.llm_stub_steps.summarize
+    input_model: examples.llm_stub_steps.TextInput
+    output_model: examples.llm_stub_steps.SummaryOutput
