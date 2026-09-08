@@ -12,6 +12,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from .context import ContextBundle, load_context_files
 from .contracts import Contract, validate_value
 from .governance import PolicyDecision, PolicyEngine, PolicyViolation
 from .routing import Goto
@@ -51,6 +52,8 @@ class Step:
     contract: Contract | None = None
     governed_action: str | None = None
     policy_engine: PolicyEngine | None = None
+    rules_files: list[str] | None = None
+    skills_files: list[str] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
@@ -63,6 +66,15 @@ class Step:
             raise ValueError("A governed step requires both an action and a policy engine.")
         if self.governed_action is not None and not self.governed_action:
             raise ValueError("A governed action must be a non-empty string.")
+        for field_name in ("rules_files", "skills_files"):
+            paths = getattr(self, field_name)
+            if paths is not None and (
+                not isinstance(paths, list)
+                or not all(isinstance(path, str) for path in paths)
+            ):
+                raise TypeError(
+                    f"{field_name} must be a list of path strings or None."
+                )
 
     def with_governance(self, action: str, policy_engine: PolicyEngine) -> Step:
         """Return a copy that checks ``action`` against ``policy_engine`` on execution."""
@@ -70,17 +82,23 @@ class Step:
             raise TypeError("policy_engine must be a PolicyEngine instance.")
         return replace(self, governed_action=action, policy_engine=policy_engine)
 
-    def execute(self, value: Any) -> Any:
-        """Run the wrapped function with the output from the preceding step.
+    def execute(self, value: Any, *, _context: ContextBundle | None = None) -> Any:
+        """Run the wrapped function, optionally injecting declared context files.
 
-        A function may return a :class:`Goto` marker instead of a plain value.
-        ``Goto`` is control flow rather than step output, so it bypasses this
-        step's output contract; the target step validates the payload through
-        its own input contract.
+        When context files are declared the function receives
+        ``{"input": value, "context": bundle.as_text()}`` instead of ``value``.
+        Otherwise behavior is identical to a context-free step.
         """
         self._check_governance()
+
+        if _context is None:
+            _context = self.load_context()
+
         if self.contract is None:
-            return self.function(value)
+            function_input: Any = value
+            if _context is not None:
+                function_input = {"input": value, "context": _context.as_text()}
+            return self.function(function_input)
 
         validated_input = validate_value(
             value,
@@ -88,7 +106,13 @@ class Step:
             step_name=self.name,
             direction="input",
         )
-        output = self.function(validated_input)
+        function_input = validated_input
+        if _context is not None:
+            function_input = {
+                "input": validated_input,
+                "context": _context.as_text(),
+            }
+        output = self.function(function_input)
         if isinstance(output, Goto):
             return output
         return validate_value(
@@ -97,6 +121,13 @@ class Step:
             step_name=self.name,
             direction="output",
         )
+
+    def load_context(self) -> ContextBundle | None:
+        """Load this step's declared context files, or ``None`` if none exist."""
+        paths = (self.rules_files or []) + (self.skills_files or [])
+        if not paths:
+            return None
+        return load_context_files(paths)
 
     def _check_governance(self) -> None:
         if self.policy_engine is None or self.governed_action is None:
@@ -243,15 +274,19 @@ class Runtime:
         jumped_from: str | None = None,
     ) -> Any:
         """Execute one step, allowing the initial attempt plus max_retries retries."""
+        bundle = step.load_context()
+        context_files = bundle.audit_entries() if bundle is not None else []
+
         for attempt in range(1, self.max_retries + 2):
             try:
                 return self.tracer.execute(
                     run_id=self.run_id,
                     step_name=step.name,
                     input_value=value,
-                    operation=lambda: step.execute(value),
+                    operation=lambda: step.execute(value, _context=bundle),
                     reached_via_jump=reached_via_jump,
                     jumped_from=jumped_from,
+                    context_files=context_files,
                 )
             except PolicyViolation:
                 # A denied approval is terminal; retrying cannot change it.

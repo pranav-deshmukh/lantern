@@ -33,6 +33,7 @@ class Tracer:
         operation: Callable[[], Result],
         reached_via_jump: bool = False,
         jumped_from: str | None = None,
+        context_files: list[dict[str, str]] | None = None,
     ) -> Result:
         """Run an operation and persist a trace record whether it succeeds or fails."""
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -52,6 +53,7 @@ class Tracer:
                 error_message=f"{type(error).__name__}: {error}",
                 reached_via_jump=reached_via_jump,
                 jumped_from=jumped_from,
+                context_files=context_files,
             )
             raise
 
@@ -66,6 +68,7 @@ class Tracer:
             error_message=None,
             reached_via_jump=reached_via_jump,
             jumped_from=jumped_from,
+            context_files=context_files,
         )
         return output
 
@@ -82,6 +85,7 @@ class Tracer:
         error_message: str | None,
         reached_via_jump: bool,
         jumped_from: str | None,
+        context_files: list[dict[str, str]] | None,
     ) -> None:
         record = {
             "run_id": run_id,
@@ -95,6 +99,8 @@ class Tracer:
             "reached_via_jump": reached_via_jump,
             "jumped_from": jumped_from,
         }
+        if context_files:
+            record["context_files"] = context_files
         self.records.append(record)
 
         if self.trace_path is not None:

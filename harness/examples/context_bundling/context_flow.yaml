@@ -1,0 +1,7 @@
+steps:
+  - name: echo_context
+    function: examples.context_bundling.stub_steps.echo_context
+    rules_files:
+      - migration-rules.md
+    skills_files:
+      - migration-skills.md

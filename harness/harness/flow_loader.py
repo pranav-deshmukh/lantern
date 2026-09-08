@@ -130,9 +130,21 @@ def _build_step(
         )
 
     contract = _build_contract(raw_step, name, path)
+    rules_files = _resolve_context_files(
+        raw_step.get("rules_files"), path, name, "rules_files"
+    )
+    skills_files = _resolve_context_files(
+        raw_step.get("skills_files"), path, name, "skills_files"
+    )
 
     try:
-        step = Step(name, function, contract=contract)
+        step = Step(
+            name,
+            function,
+            contract=contract,
+            rules_files=rules_files,
+            skills_files=skills_files,
+        )
     except (TypeError, ValueError) as error:
         raise FlowLoadError(
             f"Flow file '{path}' step '{name}' is invalid: {error}"
@@ -185,6 +197,41 @@ def _build_contract(raw_step: dict[str, Any], name: str, path: Path) -> Contract
         raise FlowLoadError(
             f"Flow file '{path}' step '{name}' has invalid models: {error}"
         ) from error
+
+
+def _resolve_context_files(
+    raw_paths: Any,
+    yaml_path: Path,
+    step_name: str,
+    kind: str,
+) -> list[str] | None:
+    """Resolve and eagerly validate declared context files.
+
+    Paths are resolved relative to the YAML file's directory (not the process
+    working directory). Missing files raise immediately at load time so a bad
+    flow never starts running.
+    """
+    if raw_paths is None:
+        return None
+
+    if not isinstance(raw_paths, list) or not all(
+        isinstance(item, str) for item in raw_paths
+    ):
+        raise FlowLoadError(
+            f"Flow file '{yaml_path}' step '{step_name}' {kind} must be a list "
+            "of path strings."
+        )
+
+    resolved: list[str] = []
+    for declared in raw_paths:
+        candidate = (yaml_path.parent / declared).resolve()
+        if not candidate.is_file():
+            raise FlowLoadError(
+                f"Flow file '{yaml_path}' step '{step_name}' references missing "
+                f"context file '{declared}' (resolved to '{candidate}')."
+            )
+        resolved.append(str(candidate))
+    return resolved
 
 
 def _import_model(
