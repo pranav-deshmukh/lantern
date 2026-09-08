@@ -1,0 +1,23 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Test and coverage output
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Packaging and build artifacts
+build/
+dist/
+*.egg-info/
+
+# Linter cache
+.ruff_cache/
+
+# Runtime state
+.harness_checkpoint.json
+.harness_checkpoint.json.tmp
+code_review_trace.jsonl

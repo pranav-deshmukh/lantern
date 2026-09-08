@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "code-reviewer-demo"
+version = "0.1.0"
+description = "Automated code reviewer and auto-fixer built on the harness package"
+requires-python = ">=3.10"
+dependencies = [
+    "harness @ file:../../harness",
+    "ruff>=0.6,<1",
+]
+
+[tool.setuptools]
+py-modules = ["steps"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "B"]
