@@ -188,6 +188,80 @@ def test_trace_records_jump_metadata(tmp_path: Path) -> None:
     assert records[3]["reached_via_jump"] is False
 
 
+def test_duplicate_step_names_advance_sequentially_by_position(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def start(value: int) -> int:
+        calls.append("start")
+        return value + 1
+
+    def check_a(value: int) -> int:
+        calls.append("check_a")
+        return value * 2
+
+    def check_b(value: int) -> int:
+        calls.append("check_b")
+        return value + 10
+
+    flow = Flow(
+        [
+            Step("start", start),
+            Step("check", check_a),
+            Step("check", check_b),
+        ]
+    )
+    runtime = Runtime(checkpoint_path=tmp_path / "cp.json", retry_delay=0)
+
+    result = runtime.run(flow, 1)
+
+    assert result == 14  # (1 + 1) * 2 + 10
+    assert calls == ["start", "check_a", "check_b"]
+
+
+def test_duplicate_step_names_resume_by_index_after_crash(tmp_path: Path) -> None:
+    class SimulatedCrash(BaseException):
+        """Represents an interruption partway through the duplicate-name flow."""
+
+    calls: list[str] = []
+    crash = {"value": True}
+
+    def start(value: int) -> int:
+        calls.append("start")
+        return value + 1
+
+    def check_a(value: int) -> int:
+        calls.append("check_a")
+        return value * 2
+
+    def check_b(value: int) -> int:
+        calls.append("check_b")
+        if crash["value"]:
+            crash["value"] = False
+            raise SimulatedCrash("stop in second check")
+        return value + 10
+
+    flow = Flow(
+        [
+            Step("start", start),
+            Step("check", check_a),
+            Step("check", check_b),
+        ]
+    )
+    runtime = Runtime(
+        checkpoint_path=tmp_path / "cp.json", run_id="dup-resume", retry_delay=0
+    )
+
+    with pytest.raises(SimulatedCrash):
+        runtime.run(flow, 1)
+
+    assert calls == ["start", "check_a", "check_b"]
+
+    result = runtime.run(flow, 1)
+
+    assert result == 14  # (1 + 1) * 2 + 10
+    assert calls == ["start", "check_a", "check_b", "check_b"]
+
+
 HELPER_MODULE_SOURCE = '''\
 """Helpers for the routing loader test."""
 

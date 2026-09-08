@@ -110,7 +110,7 @@ class Step:
 class _ResumeState:
     """The next step to run after a checkpoint resume, plus run bookkeeping."""
 
-    next_step_name: str | None
+    next_index: int | None
     value: Any
     jumps: int
     reached_via_jump: bool
@@ -174,25 +174,25 @@ class Runtime:
     def run(self, flow: Flow, initial_input: Any) -> Any:
         """Run ``flow`` from its start or resume it from this runtime's checkpoint.
 
-        Execution is not strictly linear: a step that returns :class:`Goto`
-        jumps to the named step next, carrying the ``Goto`` payload as that
-        step's input.
+        Ordinary (non-Goto) advancement is purely positional: it always moves
+        to ``index + 1``, so duplicate step names never derail sequential
+        progress. Only an explicit :class:`Goto` target uses a name lookup,
+        because jumps are inherently non-positional.
         """
         if not isinstance(flow, Flow):
             raise TypeError("flow must be a Flow instance.")
 
         state = self._resume_state(flow, initial_input)
-        if state.next_step_name is None:
+        if state.next_index is None:
             return state.value
 
-        next_name = state.next_step_name
+        index = state.next_index
         value = state.value
         jumps = state.jumps
         reached_via_jump = state.reached_via_jump
         jumped_from = state.jumped_from
 
         while True:
-            index = self._step_index(flow, next_name)
             step = flow.steps[index]
 
             value = self._execute_with_retries(
@@ -220,7 +220,7 @@ class Runtime:
                     index, step.name, value, jumps=jumps, output_is_goto=True
                 )
 
-                next_name = value.target_step_name
+                index = target_index
                 value = value.payload
                 reached_via_jump = True
                 jumped_from = step.name
@@ -230,7 +230,7 @@ class Runtime:
                 if index + 1 >= len(flow.steps):
                     return value
 
-                next_name = flow.steps[index + 1].name
+                index = index + 1
                 reached_via_jump = False
                 jumped_from = None
 
@@ -308,11 +308,7 @@ class Runtime:
             if target_index is None:
                 raise GotoTargetError(step_name, goto.target_step_name)
             return _ResumeState(
-                next_step_name=goto.target_step_name,
-                value=goto.payload,
-                jumps=jumps,
-                reached_via_jump=True,
-                jumped_from=step_name,
+                target_index, goto.payload, jumps, True, step_name
             )
 
         if completed_step.contract is not None:
@@ -328,19 +324,13 @@ class Runtime:
         if step_index + 1 >= len(flow.steps):
             return _ResumeState(None, output, jumps, False, None)
 
-        return _ResumeState(
-            next_step_name=flow.steps[step_index + 1].name,
-            value=output,
-            jumps=jumps,
-            reached_via_jump=False,
-            jumped_from=None,
-        )
+        return _ResumeState(step_index + 1, output, jumps, False, None)
 
     @staticmethod
     def _fresh_state(flow: Flow, initial_input: Any) -> _ResumeState:
         if not flow.steps:
             return _ResumeState(None, initial_input, 0, False, None)
-        return _ResumeState(flow.steps[0].name, initial_input, 0, False, None)
+        return _ResumeState(0, initial_input, 0, False, None)
 
     @staticmethod
     def _step_index_or_none(flow: Flow, step_name: str) -> int | None:
@@ -350,13 +340,6 @@ class Runtime:
             if step.name == step_name:
                 return index
         return None
-
-    @classmethod
-    def _step_index(cls, flow: Flow, step_name: str) -> int:
-        index = cls._step_index_or_none(flow, step_name)
-        if index is None:
-            raise ValueError(f"Unknown step '{step_name}'.")
-        return index
 
     def _read_checkpoint(self) -> dict[str, Any]:
         try:
