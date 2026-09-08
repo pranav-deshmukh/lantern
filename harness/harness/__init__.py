@@ -1,5 +1,6 @@
 """Public API for the minimal multi-step execution engine."""
 
+from .agent import Agent, Harness
 from .context import ContextBundle, MissingContextFileError, load_context_files
 from .contracts import Contract, ContractViolationError
 from .core import (
@@ -18,6 +19,7 @@ from .trace_viewer import load_traces, print_trace
 from .tracing import Tracer
 
 __all__ = [
+    "Agent",
     "Baseline",
     "ContextBundle",
     "Contract",
@@ -26,6 +28,7 @@ __all__ = [
     "FlowLoadError",
     "Goto",
     "GotoTargetError",
+    "Harness",
     "MaxJumpsExceeded",
     "MissingContextFileError",
     "PolicyDecision",
