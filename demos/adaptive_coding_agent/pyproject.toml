@@ -8,7 +8,6 @@ version = "0.1.0"
 description = "Adaptive coding agent init-flow demo built on the harness package"
 requires-python = ">=3.10"
 dependencies = [
-    "harness @ file:../../harness",
     "ruff>=0.6,<1",
 ]
 
