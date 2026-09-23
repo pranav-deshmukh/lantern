@@ -1,7 +1,12 @@
 """Public API for the minimal multi-step execution engine."""
 
 from .agent import Agent, Harness
-from .context import ContextBundle, MissingContextFileError, load_context_files
+from .context import (
+    ContextBundle,
+    ExecutionContext,
+    MissingContextFileError,
+    load_context_files,
+)
 from .contracts import Contract, ContractViolationError
 from .core import (
     Flow,
@@ -24,6 +29,7 @@ __all__ = [
     "ContextBundle",
     "Contract",
     "ContractViolationError",
+    "ExecutionContext",
     "Flow",
     "FlowLoadError",
     "Goto",

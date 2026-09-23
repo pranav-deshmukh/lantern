@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import time
 import uuid
@@ -12,11 +13,24 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from .context import ContextBundle, load_context_files
+from .context import ExecutionContext, load_context_files
 from .contracts import Contract, validate_value
 from .governance import PolicyDecision, PolicyEngine, PolicyViolation
 from .routing import Goto
 from .tracing import Tracer
+
+
+def _accepts_context(function: Callable[..., Any]) -> bool:
+    """Return whether ``function`` opts into receiving execution context.
+
+    Opt-in is explicit and signature-based: the callable must declare a
+    parameter named ``context``. Simple functions and BYO agents therefore
+    remain completely unaware of Lantern.
+    """
+    try:
+        return "context" in inspect.signature(function).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 class GotoTargetError(ValueError):
@@ -82,23 +96,25 @@ class Step:
             raise TypeError("policy_engine must be a PolicyEngine instance.")
         return replace(self, governed_action=action, policy_engine=policy_engine)
 
-    def execute(self, value: Any, *, _context: ContextBundle | None = None) -> Any:
-        """Run the wrapped function, optionally injecting declared context files.
+    def execute(self, value: Any, *, _context: ExecutionContext | None = None) -> Any:
+        """Run the wrapped function.
 
-        When context files are declared the function receives
-        ``{"input": value, "context": bundle.as_text()}`` instead of ``value``.
-        Otherwise behavior is identical to a context-free step.
+        The user's input is passed through unchanged. A function that declares
+        a ``context`` parameter opts into receiving the execution context as a
+        keyword argument (``function(value, context=context)``); otherwise it
+        is called with ``value`` only, exactly as before.
         """
         self._check_governance()
 
         if _context is None:
-            _context = self.load_context()
+            _context = self.build_context()
+
+        wants_context = _accepts_context(self.function)
 
         if self.contract is None:
-            function_input: Any = value
-            if _context is not None:
-                function_input = {"input": value, "context": _context.as_text()}
-            return self.function(function_input)
+            if wants_context:
+                return self.function(value, context=_context)
+            return self.function(value)
 
         validated_input = validate_value(
             value,
@@ -106,13 +122,10 @@ class Step:
             step_name=self.name,
             direction="input",
         )
-        function_input = validated_input
-        if _context is not None:
-            function_input = {
-                "input": validated_input,
-                "context": _context.as_text(),
-            }
-        output = self.function(function_input)
+        if wants_context:
+            output = self.function(validated_input, context=_context)
+        else:
+            output = self.function(validated_input)
         if isinstance(output, Goto):
             return output
         return validate_value(
@@ -122,12 +135,17 @@ class Step:
             direction="output",
         )
 
-    def load_context(self) -> ContextBundle | None:
-        """Load this step's declared context files, or ``None`` if none exist."""
-        paths = (self.rules_files or []) + (self.skills_files or [])
-        if not paths:
-            return None
-        return load_context_files(paths)
+    def build_context(self) -> ExecutionContext:
+        """Build the execution context for this step.
+
+        Rules and skills are loaded separately so the harness (and the trace)
+        can distinguish them, while memory/experience remain available as
+        extension points without changing the input contract.
+        """
+        return ExecutionContext(
+            rules=load_context_files(self.rules_files) if self.rules_files else None,
+            skills=load_context_files(self.skills_files) if self.skills_files else None,
+        )
 
     def _check_governance(self) -> None:
         if self.policy_engine is None or self.governed_action is None:
@@ -274,8 +292,8 @@ class Runtime:
         jumped_from: str | None = None,
     ) -> Any:
         """Execute one step, allowing the initial attempt plus max_retries retries."""
-        bundle = step.load_context()
-        context_files = bundle.audit_entries() if bundle is not None else []
+        context = step.build_context()
+        context_files = context.audit_entries()
 
         for attempt in range(1, self.max_retries + 2):
             try:
@@ -283,7 +301,7 @@ class Runtime:
                     run_id=self.run_id,
                     step_name=step.name,
                     input_value=value,
-                    operation=lambda: step.execute(value, _context=bundle),
+                    operation=lambda: step.execute(value, _context=context),
                     reached_via_jump=reached_via_jump,
                     jumped_from=jumped_from,
                     context_files=context_files,

@@ -82,7 +82,7 @@ Built and tested so far, in the order they were built:
 | `flow_loader.py` (`load_flow`) | Declarative YAML flow definitions. A flow is data, not code — the exact same `Runtime`/`Step`/`Contract`/`PolicyEngine` machinery runs a migration-shaped flow or a PR-review-shaped flow with zero code differences, only the YAML differs. Fails eagerly at load time (bad import paths, missing files) rather than partway through a run. |
 | `routing.py` (`Goto`) | Non-linear flows. A step can return `Goto(target_step_name, payload)` to jump to any other named step instead of proceeding sequentially — this is what makes loop-back ("verifier failed, retry an earlier step with feedback") possible. Bounded by `max_jumps` to prevent infinite loops. |
 | `anomaly.py` (`Baseline`, `find_anomalies`) | Learns "normal" duration per step from past successful runs, then flags a new run's steps that deviate significantly, are entirely new/unrecognized, or failed outright — with a human-readable reason for each. |
-| `context.py` (`load_context_files`, `ContextBundle`) | A step can declare `rules_files` / `skills_files` (markdown or any text files). Their content is mechanically bundled into the step's input, and — critically — the trace records each file's path **and SHA-256 content hash**, so you can prove exactly which version of a rules file was in effect for any given run. This is the "agents/*.md folder" pattern made auditable. |
+| `context.py` (`load_context_files`, `ContextBundle`, `ExecutionContext`) | A step can declare `rules_files` / `skills_files` (markdown or any text files). Their content is delivered as a separate `ExecutionContext` to functions that opt in via a `context` parameter — the user's input is never reshaped — and the trace records each file's path **and SHA-256 content hash**, so you can prove exactly which version of a rules file was in effect for any given run. This is the "agents/*.md folder" pattern made auditable. |
 | `llm_step.py` (`call_deepseek`) | A real, working LLM call wrapper (DeepSeek's OpenAI-compatible API). Proves the whole system works with a genuine, non-deterministic model in the loop, not just deterministic stub functions. |
 | `agent.py` (`Agent`, `Harness`) | Beginner-friendly single entry point: `Harness(agent_or_flow).run(input)` wraps a plain callable, any object with a `run` method, or an existing multi-step `Flow`, delegating to `Runtime` with all of its options intact. |
 
@@ -155,9 +155,15 @@ next phase begins. If you are an agent picking up work here:
 
 ```bash
 cd harness
-pip install -e .
-pytest tests/ -v
+python -m pip install -e .
+python -m pytest tests/ -v
 ```
+
+`pip install -e .` installs the project's declared dependencies (`pydantic`,
+`pyyaml`, and `openai`). Run that install step before the test suite — the
+tests import the harness from source, so skipping the install will make
+collection fail with `ModuleNotFoundError: openai` (and similarly for the
+other dependencies).
 
 See `demos/` for real, working end-to-end examples built on top of the
 harness as an external consumer.
