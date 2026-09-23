@@ -6,3 +6,10 @@ def percentage(part: float, whole: float) -> float:
     if whole == 0:
         return 0.0
     return round((part / whole) * 100, 1)
+
+
+def clamp(value: float, minimum: float, maximum: float) -> float:
+    """Return value constrained to the inclusive range."""
+    if value < minimum:
+        return minimum
+    return value

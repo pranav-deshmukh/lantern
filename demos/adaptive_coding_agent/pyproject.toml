@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [tool.setuptools]
-py-modules = ["steps", "run_init"]
+py-modules = ["steps", "run_init", "run_story"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

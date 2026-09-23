@@ -1,0 +1,29 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Test and coverage output
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Packaging and build artifacts
+build/
+dist/
+*.egg-info/
+
+# Linter cache
+.ruff_cache/
+
+# Generated context artifact (produced by run_init.py)
+project-profile.json
+
+# Runtime state and traces
+init_trace.jsonl
+.init_checkpoint.json
+.init_checkpoint.json.tmp
+story_trace.jsonl
+.story_checkpoint.json
+.story_checkpoint.json.tmp
