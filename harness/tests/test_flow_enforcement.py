@@ -51,6 +51,7 @@ def test_sequential_flow_executes_in_declared_order(tmp_path: Path) -> None:
 
 
 def test_skipped_step_is_rejected(tmp_path: Path) -> None:
+    # A -> B -> C is declared; the agent attempts A -> C (skipping B).
     flow = Flow(
         [
             Step("A", lambda value: Goto("C", value)),
@@ -65,6 +66,24 @@ def test_skipped_step_is_rejected(tmp_path: Path) -> None:
         runtime.run(flow, 0)
 
     assert runtime.state.status == "rejected"
+
+
+def test_undeclared_sequential_next_is_rejected(tmp_path: Path) -> None:
+    # B -> C is NOT declared, so even though C is immediately after B in the
+    # step list, a plain return from B must not advance to C.
+    flow = Flow(
+        [
+            Step("A", lambda value: value),
+            Step("B", lambda value: value),
+            Step("C", lambda value: value),
+            Step("D", lambda value: value),
+        ],
+        transitions=[Transition("A", "B"), Transition("B", "D")],
+    )
+    runtime = Runtime(checkpoint_path=tmp_path / "cp.json", retry_delay=0)
+
+    with pytest.raises(IllegalTransitionError, match="B.*C"):
+        runtime.run(flow, 0)
 
 
 def test_valid_branch_can_select_declared_target(tmp_path: Path) -> None:
@@ -87,7 +106,12 @@ def test_valid_branch_can_select_declared_target(tmp_path: Path) -> None:
                 Step("C", make("C")),
                 Step("D", make("D")),
             ],
-            transitions=[Transition("A", "B"), Transition("B", "D")],
+            transitions=[
+                Transition("A", "B"),
+                Transition("B", "C"),
+                Transition("B", "D"),
+                Transition("C", "D"),
+            ],
         )
         return flow, order
 

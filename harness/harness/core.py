@@ -272,18 +272,13 @@ class Flow:
     def is_transition_allowed(self, source: str, target: str) -> bool:
         """Return whether moving from ``source`` to ``target`` is legal.
 
-        The next step in list order is always legal (that is the declared
-        primary path). Any other target must be explicitly declared. In legacy
-        mode (no explicit transitions) every named target is allowed.
+        When explicit transitions are declared the declared graph is fully
+        authoritative: a transition is legal only if it is explicitly listed,
+        including the ordinary next-in-list step. When no transitions are
+        declared (legacy mode) every named target is allowed.
         """
         if not self.transitions:
             return True
-
-        source_index = self._index_of(source)
-        if source_index is not None and source_index + 1 < len(self.steps):
-            if self.steps[source_index + 1].name == target:
-                return True
-
         return (source, target) in self._transition_set
 
     def _index_of(self, name: str) -> int | None:
@@ -426,6 +421,15 @@ class Runtime:
                 index = target_index
                 value = value.payload
             else:
+                if index + 1 < len(flow.steps):
+                    next_name = flow.steps[index + 1].name
+                    if not flow.is_transition_allowed(step.name, next_name):
+                        self.state.status = "rejected"
+                        self.state.transition_history.append(
+                            TransitionRecord(step.name, next_name, "rejected")
+                        )
+                        raise IllegalTransitionError(step.name, next_name)
+
                 self._write_checkpoint(index, step.name, value, jumps=jumps)
 
                 if index + 1 >= len(flow.steps):
