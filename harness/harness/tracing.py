@@ -34,6 +34,7 @@ class Tracer:
         reached_via_jump: bool = False,
         jumped_from: str | None = None,
         context_files: list[dict[str, str]] | None = None,
+        transition: dict[str, Any] | None = None,
     ) -> Result:
         """Run an operation and persist a trace record whether it succeeds or fails."""
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -54,6 +55,7 @@ class Tracer:
                 reached_via_jump=reached_via_jump,
                 jumped_from=jumped_from,
                 context_files=context_files,
+                transition=transition,
             )
             raise
 
@@ -69,6 +71,7 @@ class Tracer:
             reached_via_jump=reached_via_jump,
             jumped_from=jumped_from,
             context_files=context_files,
+            transition=transition,
         )
         return output
 
@@ -86,6 +89,7 @@ class Tracer:
         reached_via_jump: bool,
         jumped_from: str | None,
         context_files: list[dict[str, str]] | None,
+        transition: dict[str, Any] | None,
     ) -> None:
         record = {
             "run_id": run_id,
@@ -101,6 +105,8 @@ class Tracer:
         }
         if context_files:
             record["context_files"] = context_files
+        if transition:
+            record["transition"] = transition
         self.records.append(record)
 
         if self.trace_path is not None:

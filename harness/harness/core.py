@@ -7,7 +7,7 @@ import json
 import time
 import uuid
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +55,51 @@ class MaxJumpsExceeded(RuntimeError):
             f"Flow exceeded max_jumps={max_jumps} at step '{step_name}' while "
             f"jumping to '{target_step_name}'; possible infinite loop."
         )
+
+
+@dataclass(frozen=True)
+class Transition:
+    """An explicit legal transition between two named steps in a flow."""
+
+    source: str
+    target: str
+
+
+class IllegalTransitionError(RuntimeError):
+    """Raised when a step attempts a transition the flow does not declare."""
+
+    def __init__(self, source: str, target: str) -> None:
+        self.source = source
+        self.target = target
+        super().__init__(
+            f"Illegal transition from '{source}' to '{target}': "
+            "the flow does not declare this transition."
+        )
+
+
+@dataclass(frozen=True)
+class TransitionRecord:
+    """A single observed movement in a run's execution history."""
+
+    source: str | None
+    target: str | None
+    reason: str
+
+
+@dataclass
+class ExecutionState:
+    """Authoritative execution state owned by the runtime.
+
+    The agent never writes this. ``transition_history`` records every legal
+    movement so the run can be reported and audited after the fact.
+    """
+
+    flow: Flow
+    run_id: str
+    status: str = "pending"
+    current_step: str | None = None
+    previous_step: str | None = None
+    transition_history: list[TransitionRecord] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -167,12 +212,85 @@ class _ResumeState:
 
 
 class Flow:
-    """An ordered collection of steps."""
+    """An ordered collection of steps with optional explicit transitions.
 
-    def __init__(self, steps: Iterable[Step]) -> None:
+    The step list defines the primary linear path (each step's next step is
+    the following one in the list). ``transitions`` declares additional legal
+    edges such as recovery loops or branches. When ``transitions`` is empty the
+    flow keeps the legacy behavior (any named ``Goto`` is allowed) so existing
+    callers remain unchanged.
+    """
+
+    def __init__(
+        self,
+        steps: Iterable[Step],
+        *,
+        transitions: Iterable[Transition | tuple[str, str]] = (),
+    ) -> None:
         self.steps = list(steps)
         if not all(isinstance(step, Step) for step in self.steps):
             raise TypeError("A Flow may only contain Step objects.")
+
+        self.transitions = [self._coerce_transition(item) for item in transitions]
+        self._transition_set = {(t.source, t.target) for t in self.transitions}
+        if self.transitions:
+            self._validate_transitions()
+
+    @staticmethod
+    def _coerce_transition(item: Transition | tuple[str, str]) -> Transition:
+        if isinstance(item, Transition):
+            return item
+        if isinstance(item, tuple) and len(item) == 2 and all(
+            isinstance(part, str) for part in item
+        ):
+            return Transition(item[0], item[1])
+        raise TypeError(
+            "transitions must be Transition instances or (source, target) pairs."
+        )
+
+    def _validate_transitions(self) -> None:
+        """Reject obviously invalid declared workflows before execution."""
+        if not self.steps:
+            raise ValueError("A flow with explicit transitions must have at least one step.")
+
+        names = [step.name for step in self.steps]
+        if len(set(names)) != len(names):
+            raise ValueError(
+                "A flow with explicit transitions requires unique step names."
+            )
+
+        for transition in self.transitions:
+            if transition.source not in names:
+                raise ValueError(
+                    f"Transition source '{transition.source}' is not a step in the flow."
+                )
+            if transition.target not in names:
+                raise ValueError(
+                    f"Transition target '{transition.target}' is not a step in the flow."
+                )
+
+    def is_transition_allowed(self, source: str, target: str) -> bool:
+        """Return whether moving from ``source`` to ``target`` is legal.
+
+        The next step in list order is always legal (that is the declared
+        primary path). Any other target must be explicitly declared. In legacy
+        mode (no explicit transitions) every named target is allowed.
+        """
+        if not self.transitions:
+            return True
+
+        source_index = self._index_of(source)
+        if source_index is not None and source_index + 1 < len(self.steps):
+            if self.steps[source_index + 1].name == target:
+                return True
+
+        return (source, target) in self._transition_set
+
+    def _index_of(self, name: str) -> int | None:
+        for index, step in enumerate(self.steps):
+            if step.name == name:
+                return index
+        return None
 
 
 class StepExecutionError(RuntimeError):
@@ -223,23 +341,46 @@ class Runtime:
     def run(self, flow: Flow, initial_input: Any) -> Any:
         """Run ``flow`` from its start or resume it from this runtime's checkpoint.
 
-        Ordinary (non-Goto) advancement is purely positional: it always moves
-        to ``index + 1``, so duplicate step names never derail sequential
-        progress. Only an explicit :class:`Goto` target uses a name lookup,
-        because jumps are inherently non-positional.
+        Lantern owns the current step. Ordinary advancement is positional
+        (``index + 1``); ``Goto`` targets are validated against the flow's
+        declared transitions and rejected deterministically if illegal.
         """
         if not isinstance(flow, Flow):
             raise TypeError("flow must be a Flow instance.")
 
-        state = self._resume_state(flow, initial_input)
-        if state.next_index is None:
-            return state.value
+        self.state = ExecutionState(flow=flow, run_id=self.run_id, status="running")
 
-        index = state.next_index
-        value = state.value
-        jumps = state.jumps
-        reached_via_jump = state.reached_via_jump
-        jumped_from = state.jumped_from
+        try:
+            return self._run_flow(flow, initial_input)
+        except IllegalTransitionError:
+            raise
+        except BaseException:
+            if self.state.status == "running":
+                self.state.status = "failed"
+            raise
+
+    def _run_flow(self, flow: Flow, initial_input: Any) -> Any:
+        resume = self._resume_state(flow, initial_input)
+        if resume.next_index is None:
+            self.state.status = "completed"
+            return resume.value
+
+        index = resume.next_index
+        value = resume.value
+        jumps = resume.jumps
+
+        if resume.reached_via_jump:
+            previous_step = resume.jumped_from
+            reason = "goto"
+        elif index > 0:
+            previous_step = flow.steps[index - 1].name
+            reason = "resume"
+        else:
+            previous_step = None
+            reason = "start"
+
+        self.state.current_step = flow.steps[index].name
+        self.state.previous_step = previous_step
 
         while True:
             step = flow.steps[index]
@@ -247,20 +388,28 @@ class Runtime:
             value = self._execute_with_retries(
                 step,
                 value,
-                reached_via_jump=reached_via_jump,
-                jumped_from=jumped_from,
+                previous_step=previous_step,
+                reason=reason,
             )
 
             if isinstance(value, Goto):
+                target = value.target_step_name
+                if not flow.is_transition_allowed(step.name, target):
+                    self.state.status = "rejected"
+                    self.state.transition_history.append(
+                        TransitionRecord(step.name, target, "rejected")
+                    )
+                    raise IllegalTransitionError(step.name, target)
+
                 jumps += 1
                 if jumps > self.max_jumps:
                     raise MaxJumpsExceeded(
-                        self.max_jumps, step.name, value.target_step_name
+                        self.max_jumps, step.name, target
                     )
 
-                target_index = self._step_index_or_none(flow, value.target_step_name)
+                target_index = self._step_index_or_none(flow, target)
                 if target_index is None:
-                    raise GotoTargetError(step.name, value.target_step_name)
+                    raise GotoTargetError(step.name, target)
 
                 # Persist the completed step *with its Goto output* so a
                 # resume knows the next step is the jump target, not the
@@ -268,34 +417,59 @@ class Runtime:
                 self._write_checkpoint(
                     index, step.name, value, jumps=jumps, output_is_goto=True
                 )
+                self.state.transition_history.append(
+                    TransitionRecord(step.name, target, "goto")
+                )
 
+                previous_step = step.name
+                reason = "goto"
                 index = target_index
                 value = value.payload
-                reached_via_jump = True
-                jumped_from = step.name
             else:
                 self._write_checkpoint(index, step.name, value, jumps=jumps)
 
                 if index + 1 >= len(flow.steps):
+                    self.state.transition_history.append(
+                        TransitionRecord(step.name, None, "complete")
+                    )
+                    self.state.current_step = step.name
+                    self.state.previous_step = previous_step
+                    self.state.status = "completed"
                     return value
 
+                self.state.transition_history.append(
+                    TransitionRecord(
+                        step.name, flow.steps[index + 1].name, "sequential"
+                    )
+                )
+                previous_step = step.name
+                reason = "sequential"
                 index = index + 1
-                reached_via_jump = False
-                jumped_from = None
+
+            self.state.current_step = flow.steps[index].name
+            self.state.previous_step = previous_step
 
     def _execute_with_retries(
         self,
         step: Step,
         value: Any,
         *,
-        reached_via_jump: bool = False,
-        jumped_from: str | None = None,
+        previous_step: str | None = None,
+        reason: str = "start",
     ) -> Any:
         """Execute one step, allowing the initial attempt plus max_retries retries."""
         context = step.build_context()
         context_files = context.audit_entries()
+        reached_via_jump = reason == "goto"
+        jumped_from = previous_step if reached_via_jump else None
 
         for attempt in range(1, self.max_retries + 2):
+            transition = {
+                "from": previous_step,
+                "to": step.name,
+                "reason": reason,
+                "attempt": attempt,
+            }
             try:
                 return self.tracer.execute(
                     run_id=self.run_id,
@@ -305,6 +479,7 @@ class Runtime:
                     reached_via_jump=reached_via_jump,
                     jumped_from=jumped_from,
                     context_files=context_files,
+                    transition=transition,
                 )
             except PolicyViolation:
                 # A denied approval is terminal; retrying cannot change it.

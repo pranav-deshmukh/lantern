@@ -9,12 +9,16 @@ from .context import (
 )
 from .contracts import Contract, ContractViolationError
 from .core import (
+    ExecutionState,
     Flow,
     GotoTargetError,
+    IllegalTransitionError,
     MaxJumpsExceeded,
     Runtime,
     Step,
     StepExecutionError,
+    Transition,
+    TransitionRecord,
 )
 from .routing import Goto
 from .flow_loader import FlowLoadError, load_flow
@@ -30,11 +34,13 @@ __all__ = [
     "Contract",
     "ContractViolationError",
     "ExecutionContext",
+    "ExecutionState",
     "Flow",
     "FlowLoadError",
     "Goto",
     "GotoTargetError",
     "Harness",
+    "IllegalTransitionError",
     "MaxJumpsExceeded",
     "MissingContextFileError",
     "PolicyDecision",
@@ -45,6 +51,8 @@ __all__ = [
     "Step",
     "StepExecutionError",
     "Tracer",
+    "Transition",
+    "TransitionRecord",
     "find_anomalies",
     "load_context_files",
     "load_flow",
