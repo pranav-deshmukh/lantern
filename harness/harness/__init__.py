@@ -26,6 +26,7 @@ from .governance import PolicyDecision, PolicyEngine, PolicyRule, PolicyViolatio
 from .anomaly import Baseline, find_anomalies
 from .trace_viewer import load_traces, print_trace
 from .tracing import Tracer
+from .events import Event, Run, RunSummary, summarize
 
 __all__ = [
     "Agent",
@@ -35,6 +36,7 @@ __all__ = [
     "ContractViolationError",
     "ExecutionContext",
     "ExecutionState",
+    "Event",
     "Flow",
     "FlowLoadError",
     "Goto",
@@ -48,6 +50,8 @@ __all__ = [
     "PolicyRule",
     "PolicyViolation",
     "Runtime",
+    "Run",
+    "RunSummary",
     "Step",
     "StepExecutionError",
     "Tracer",
@@ -58,4 +62,5 @@ __all__ = [
     "load_flow",
     "load_traces",
     "print_trace",
+    "summarize",
 ]

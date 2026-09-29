@@ -1,672 +1,692 @@
-Absolutely. Give your coding agent this prompt. It is intentionally focused on **Flow enforcement v1** and tells it not to jump ahead into YAML, learning, or unnecessary abstractions.
+You are working on Lantern, an open-source Python agent runtime.
 
-```text
-You are working on Lantern, an open-source Python project that is intended to become a general-purpose agentic flow runtime.
+IMPORTANT CONTEXT:
 
-IMPORTANT PRODUCT PRINCIPLE:
+Lantern is NOT intended to become another LangGraph.
 
-The LLM/agent must NOT be responsible for orchestrating the workflow.
+LangGraph / agent frameworks can own:
 
-The LLM proposes/produces an output.
-Lantern owns the workflow state, legal transitions, execution order, retries, failures, and recovery.
+- agent reasoning
+- agent state
+- agent routing
+- internal graph construction
 
-The main problem we are solving is:
+Lantern is the operational runtime underneath agents.
 
-I previously built a 13-agent workflow in Cursor where an orchestrator LLM was given an MD file describing the workflow. Sometimes the orchestrator simply skipped a step. Rules were also sometimes present in the prompt but not actually followed reliably.
+Lantern's responsibility is:
 
-Lantern must make this structurally impossible or at minimum mechanically detectable.
+- reliable execution
+- validation
+- retries
+- recovery
+- checkpoint/resume
+- governance
+- tracing
+- auditability
+- observability
+- evaluation
 
-CORE PRINCIPLE:
+We have already implemented:
 
-    "The LLM proposes actions; Lantern controls execution."
+- Step
+- Flow
+- Runtime
+- Agent integration
+- ExecutionContext
+- Contracts
+- Retry
+- Goto/recovery
+- Checkpointing
+- Governance
+- Tracing
+- explicit transition validation
+- rejection of undeclared transitions when explicit transitions are defined
 
-Your task is to implement FLOW ENFORCEMENT V1.
+Do NOT turn Lantern into a more sophisticated graph orchestration framework.
 
 ==================================================
-1. FIRST INSPECT THE EXISTING CODEBASE
+TASK: BUILD THE RUN + STRUCTURED EVENT FOUNDATION
 ==================================================
+
+The next major capability is observability.
+
+We eventually want a UI that shows a live execution graph generated from the actual runtime execution.
+
+For example, during a run:
+
+    ┌──────────┐
+    │ classify │ ✓
+    └────┬─────┘
+         ↓
+    ┌──────────┐
+    │  draft   │ ✓
+    └────┬─────┘
+         ↓
+    ┌──────────────┐
+    │ quality_check│ ✗
+    └──────┬───────┘
+           ↓
+         retry
+           ↓
+    ┌──────────┐
+    │  draft   │ ↻
+    └────┬─────┘
+         ↓
+    ┌──────────────┐
+    │ quality_check│ ✓
+    └──────────────┘
+
+After completion, the same execution graph should contain the complete
+history of what actually happened.
+
+IMPORTANT:
+
+The future UI must NOT have to infer the execution graph by inspecting
+random logs, checkpoints, or agent output.
+
+The Runtime should emit structured events that are sufficient to reconstruct
+the execution timeline and graph.
+
+==================================================
+
+1. # FIRST INSPECT THE EXISTING CODE
 
 Before changing anything:
 
-- Inspect the existing Step, Flow, Runtime, Agent, ExecutionContext, Goto, Retry, tracing, checkpointing, contracts, and tests.
-- Understand the current public API.
-- Do NOT rewrite working architecture unnecessarily.
-- Do NOT introduce a parallel workflow system.
-- Extend the existing abstractions.
-- Preserve backward compatibility wherever reasonably possible.
-- Run the existing test suite before making changes so we know the baseline.
+- inspect Runtime
+- inspect Flow
+- inspect Step
+- inspect tracing
+- inspect checkpointing
+- inspect Goto
+- inspect contracts
+- inspect ExecutionContext
+- inspect all existing tests
 
-Do not start by implementing YAML.
+Do not create a second tracing system if the existing tracing architecture
+can be evolved.
 
-Do not start by implementing memory, learning, experience, or evaluation systems.
+Do not rewrite the Runtime.
 
-This task is specifically about making Flow the authoritative execution abstraction.
+Preserve the current public API wherever possible.
 
-==================================================
-2. MAKE FLOW THE SOURCE OF TRUTH
-==================================================
+Run the existing tests before changing anything.
 
-A Flow should represent the declared workflow independently of the LLM.
+# ================================================== 2. INTRODUCE A FIRST-CLASS RUN
 
-Conceptually:
-
-    Flow
-      |
-      +-- Step A
-      |
-      +-- Step B
-      |
-      +-- Step C
-      |
-      +-- Step D
-
-The Runtime owns the current step.
-
-The agent does NOT choose the next step.
-
-For example:
-
-    classify -> draft -> quality_check -> approve
-
-If quality_check fails:
-
-    quality_check -> draft
-
-The agent should never be able to say:
-
-    "I think we can skip draft and go directly to approve."
-
-Lantern must ignore/reject such an attempt because the Flow does not permit it.
-
-==================================================
-3. DEFINE EXPLICIT FLOW TRANSITIONS
-==================================================
-
-Inspect the current Flow/Step/Goto implementation and evolve it so that legal transitions are explicit.
-
-We need to be able to represent something conceptually like:
-
-    classify
-        -> draft
-
-    draft
-        -> quality_check
-
-    quality_check
-        -> approve
-        -> draft   # recovery path
-
-    approve
-        -> END
-
-Do not necessarily copy this exact API if the existing architecture suggests a better one.
-
-The important property is:
-
-    Runtime can determine the legal next states WITHOUT asking the LLM.
-
-A transition should have a clear source and destination.
-
-For example, conceptually:
-
-    Transition(
-        source="quality_check",
-        target="draft",
-        condition="failure"
-    )
-
-or an equivalent design that fits Lantern.
-
-Avoid overengineering conditional expressions at this stage.
-
-==================================================
-4. RUNTIME MUST OWN THE CURRENT STATE
-==================================================
-
-Introduce explicit execution state if the current architecture does not already have it.
+We need a coherent representation of one Runtime execution.
 
 Conceptually:
 
-    ExecutionState:
-        flow
-        current_step
-        previous_step
-        attempt
-        status
-        transition_history
+    Run
+      ├── run_id
+      ├── flow / agent identity
+      ├── status
+      ├── started_at
+      ├── finished_at
+      ├── result
+      ├── error
+      ├── events
+      └── execution metadata
 
-The exact implementation should fit the existing architecture.
+The exact API should fit Lantern's current architecture.
 
-The Runtime should be able to answer:
+Possible statuses:
 
-    What flow am I executing?
-    What step am I currently executing?
-    What step did I come from?
-    What transitions are legal from here?
-    What happened previously?
+    running
+    completed
+    failed
+    rejected
+    interrupted
 
-The current step must come from Lantern's runtime state, not from an LLM response.
+Do not overengineer this.
 
-==================================================
-5. AGENT OUTPUT MUST NOT CONTROL FLOW
-==================================================
+The purpose of Run is to provide a coherent record of one execution.
 
-This is extremely important.
+# ================================================== 3. STRUCTURED EVENTS
 
-Agents should continue returning their normal outputs.
+Every important runtime action should produce a structured event.
 
-For example:
+At minimum support:
 
-    result = agent.run(input)
-
-The result should NOT automatically become:
-
-    {
-        "output": ...,
-        "next_step": "some_step"
-    }
-
-where Lantern blindly follows the requested next_step.
-
-If the existing system supports agent-suggested routing, do NOT let that bypass Flow validation.
-
-If an agent can propose a destination, Lantern must validate it against the declared Flow:
-
-    proposed destination
-             |
-             v
-    Is transition legal?
-         /       \
-       yes        no
-       |           |
-    execute      reject
-
-Preferably, the runtime itself should determine the transition whenever possible.
-
-==================================================
-6. PREVENT SKIPPED STEPS
-==================================================
-
-This is the main reason for this feature.
-
-Given:
-
-    A -> B -> C -> D
-
-the Runtime must NOT allow:
-
-    A -> C
-
-unless the Flow explicitly declares:
-
-    A -> C
-
-Likewise:
-
-    A -> B -> C
-
-must not silently become:
-
-    A -> C
-
-just because an agent decided B was unnecessary.
-
-Create tests proving this.
-
-Example:
-
-    flow = A -> B -> C
-
-Run A.
-
-Attempt to transition directly to C.
-
-Expected:
-
-    Lantern rejects the transition.
-
-The rejection should be deterministic and not dependent on an LLM.
-
-==================================================
-7. SUPPORT RECOVERY / GOTO
-==================================================
-
-Preserve the existing Goto behavior.
-
-For example:
-
-    classify
-      ↓
-    draft
-      ↓
-    quality_check
-      |
-      | failure
-      ↓
-    draft
-      ↓
-    quality_check
-      |
-      | success
-      ↓
-    approve
-
-This is a VALID transition because the Flow explicitly permits it.
-
-Make sure Goto does not become a loophole for arbitrary jumps.
-
-For example:
-
-    quality_check -> draft
-
-may be legal.
-
-But:
-
-    quality_check -> random_step
-
-must fail unless explicitly declared.
-
-Existing Goto tests must continue passing.
-
-==================================================
-8. STEP CONTRACTS / VERIFICATION
-==================================================
-
-Integrate with the existing contract system rather than creating a new parallel validation system.
-
-The conceptual execution lifecycle should become:
-
-    current Step
-         |
-         v
-    prepare execution context
-         |
-         v
-    execute Agent
-         |
-         v
-    obtain output
-         |
-         v
-    verify / contract
-         |
-       /   \
-    pass   fail
-     |       |
-     |       +--> retry/recovery
-     |
-     v
-    determine legal transition
-         |
-         v
-    next Step
-
-The agent output is not trusted as workflow state.
-
-A failed contract should not advance the flow unless the existing semantics explicitly define another recovery behavior.
-
-==================================================
-9. RULES AND SKILLS MUST BE STEP-SCOPED
-==================================================
-
-Do NOT solve rules by simply stuffing the entire flow's rules into every prompt.
-
-A Step should be able to declare relevant rules and skills.
-
-Conceptually:
-
-    Step(
-        name="draft",
-        agent=writer,
-        rules=["response_policy", "pii_policy"],
-        skills=["response_tone"]
-    )
-
-The Runtime should construct the ExecutionContext for that step using the applicable rules/skills.
-
-The agent receives the context relevant to its current step.
-
-Do NOT make every agent responsible for remembering the entire 13-agent workflow.
-
-Lantern knows the entire workflow.
-
-The agent only needs enough context to perform its current responsibility.
-
-==================================================
-10. IMPORTANT DISTINCTION: CONTEXT VS ENFORCEMENT
-==================================================
-
-Keep this distinction explicit in the architecture.
-
-Rules in ExecutionContext are INFORMATION/INSTRUCTIONS available to the agent.
-
-They are NOT automatically enforcement.
-
-For important rules, enforcement should eventually happen through contracts/validators/evaluators.
-
-For example:
-
-    draft agent
-         |
-         v
-    output
-         |
-         v
-    PII validator
-         |
-      fail
-         |
-         v
-    Runtime recovery
-
-Do not build a huge evaluator framework in this task.
-
-Just make sure the Flow architecture leaves a clean place for verification to happen.
-
-==================================================
-11. ADD FLOW VALIDATION
-==================================================
-
-Flow should validate itself before execution.
-
-At minimum detect things such as:
-
-- duplicate step names
-- missing transition targets
-- missing start step
-- invalid Goto targets
-- impossible references
-- invalid transition source
-- malformed flow structure
-
-If practical, also detect unreachable steps.
-
-Do not overengineer graph theory.
-
-The goal is to prevent obviously invalid workflow definitions before runtime execution.
-
-==================================================
-12. EXECUTION RESULT / STATE
-==================================================
-
-If the current Runtime does not already expose enough information, introduce a minimal execution result/state representation.
-
-We eventually want Lantern to be able to report something like:
-
-    Flow: support_ticket
-    Run: 8F32
-
-    ✓ classify
-    ✓ draft
-    ✗ quality_check
-      Contract failed: resolution_required
-
-    ↻ draft
-    ✓ quality_check
-    ⏳ approve
-
-    Skipped steps: 0
-    Recovery transitions: 1
-
-Do NOT build the final CLI dashboard yet.
-
-Just make the underlying state/history available in a clean way.
-
-==================================================
-13. TRACE TRANSITIONS
-==================================================
-
-Extend the existing tracing system so transitions are observable.
-
-A trace should be able to distinguish:
-
+    run_started
     step_started
     step_completed
     step_failed
+    contract_failed
+    retry_started
     transition
-    retry
-    goto/recovery
+    goto
+    human_approval_requested
+    human_approval_received
+    run_completed
+    run_failed
 
-A transition event should contain enough information to understand:
+Use the existing tracing implementation where possible.
 
-    source step
-    destination step
+Do not create two competing event/tracing concepts.
+
+If the existing trace model can become the event model, evolve it.
+
+# ================================================== 4. EVENT SCHEMA
+
+Create a stable structured event representation.
+
+Conceptually:
+
+    Event(
+        event_id,
+        run_id,
+        type,
+        timestamp,
+        step,
+        attempt,
+        data
+    )
+
+The exact names/types can differ if the existing code has better conventions.
+
+Important properties:
+
+- events belong to a run
+- events are ordered
+- events are immutable after emission
+- event type is explicit
+- event data is structured
+- events contain enough information for future UI rendering
+
+Do not store giant unstructured log strings as the primary representation.
+
+# ================================================== 5. STEP EVENTS
+
+For every step execution, record enough information to reconstruct:
+
+    step started
+    step completed / failed
+    duration
+    attempt number
+    error/contract failure when applicable
+
+Example conceptual event:
+
+    {
+        "type": "step_started",
+        "run_id": "...",
+        "step": "quality_check",
+        "attempt": 1
+    }
+
+and:
+
+    {
+        "type": "step_failed",
+        "run_id": "...",
+        "step": "quality_check",
+        "attempt": 1,
+        "reason": "contract_failed"
+    }
+
+Do not expose sensitive input/output automatically in events.
+
+Avoid dumping arbitrary user data into traces.
+
+# ================================================== 6. TRANSITION EVENTS
+
+A future execution graph will need to know which transitions actually
+occurred.
+
+Record:
+
+    source
+    target
     reason
     attempt
 
 Example:
 
     {
-        "event": "transition",
-        "from": "quality_check",
-        "to": "draft",
+        "type": "transition",
+        "source": "quality_check",
+        "target": "draft",
         "reason": "contract_failure",
         "attempt": 1
     }
 
-Use the existing tracing architecture if possible.
+This should describe what Lantern actually executed.
 
-Do not create a second tracing system.
+Do not generate graph edges by reading agent text.
 
-==================================================
-14. CHECKPOINTING
-==================================================
+# ================================================== 7. RETRIES AND RECOVERY
 
-Ensure checkpoints capture enough state to resume the flow safely.
+Make retries and Goto/recovery visible as runtime events.
 
-A checkpoint should not merely say:
+For example:
 
-    "last function executed = quality_check"
+    step_started(draft, attempt=1)
+    step_failed(draft, attempt=1)
+    retry_started(draft, attempt=2)
+    step_started(draft, attempt=2)
+    step_completed(draft, attempt=2)
 
-It should preserve enough information for Lantern to know:
+For Goto:
 
-    current flow
-    current step
-    transition history / relevant execution state
-    attempts
-    existing checkpoint metadata
+    step_failed(quality_check)
+    transition(
+        source="quality_check",
+        target="draft",
+        reason="contract_failure"
+    )
 
-Do not redesign checkpointing unnecessarily.
+The event stream must preserve the actual order.
 
-Only extend it if needed for authoritative Flow state.
+# ================================================== 8. RUN RESULT
 
-==================================================
-15. TESTS ARE CRITICAL
-==================================================
+At the end of Runtime execution, the caller should have access to the
+completed Run / execution result.
 
-Add focused tests proving that Lantern—not the LLM—controls execution.
+Conceptually:
 
-At minimum implement tests for:
+    run = runtime.run(flow, input)
 
-### Test 1: Sequential flow
+    run.status
+    run.result
+    run.events
+    run.started_at
+    run.finished_at
 
-    A -> B -> C
+Do not necessarily change Runtime.run() to return exactly this if that would
+break the existing API.
 
-Expected:
+If backward compatibility requires keeping the current return value,
+introduce another clean mechanism for retrieving the Run.
 
-    A, B, C
+Do not break existing user code merely to add observability.
 
-### Test 2: Skipped step is rejected
+# ================================================== 9. GRAPH-READY DATA, NOT GRAPH UI
 
-Declared:
+This task must prepare the runtime for a future execution graph UI.
 
-    A -> B -> C
+DO NOT build the UI now.
 
-Attempt:
+DO NOT add React.
 
-    A -> C
+DO NOT add a web server.
 
-Expected:
+DO NOT add a frontend dependency.
 
-    deterministic transition error
+DO NOT build a graph visualization library.
 
-### Test 3: Valid branch
+Instead ensure the event model can later produce:
 
-Declared:
+    nodes:
+        classify
+        draft
+        quality_check
+        approve
+
+and actual execution edges:
+
+    classify -> draft
+    draft -> quality_check
+    quality_check -> draft
+    draft -> quality_check
+    quality_check -> approve
+
+The same step may appear multiple times in execution history.
+
+That is intentional.
+
+The UI will later distinguish:
+
+    declared Flow
+
+from:
+
+    actual execution trajectory
+
+This distinction is important.
+
+# ================================================== 10. DECLARED FLOW VS ACTUAL EXECUTION
+
+Do not confuse the Flow definition with the execution history.
+
+Flow says:
 
     A -> B
     B -> C
-    B -> D
+    C -> D
+    C -> B
 
-A valid condition can select C or D according to the Runtime's transition mechanism.
+Actual run might be:
 
-### Test 4: Invalid branch
+    A
+    B
+    C
+    B
+    C
+    D
 
-Attempt:
+The future UI should be able to show both:
 
-    B -> X
+    Declared Flow
+        +
+    Actual Run
 
-Expected:
+Therefore the event stream must represent actual execution.
 
-    deterministic failure
+Do not mutate the Flow itself to represent execution.
 
-### Test 5: Goto recovery
+# ================================================== 11. RUN SUMMARY
+
+Provide a way to derive a summary from the event stream.
+
+Conceptually:
+
+    RunSummary(
+        status,
+        total_steps,
+        total_attempts,
+        retries,
+        recoveries,
+        failures,
+        contract_failures,
+        human_interventions,
+        duration
+    )
+
+Do not manually maintain dozens of counters throughout Runtime if they can
+be reliably derived from immutable events.
+
+Prefer:
+
+    events -> summary
+
+over duplicated mutable state.
+
+However, use reasonable judgment if some metrics are better maintained
+directly.
+
+# ================================================== 12. ERROR HANDLING
+
+When a run fails:
+
+- emit the appropriate failure event
+- preserve the original error
+- mark Run status correctly
+- do not lose events that occurred before failure
+
+When a run succeeds:
+
+- emit run_completed
+- preserve final result
+- preserve complete event history
+
+When a contract rejects output:
+
+- distinguish that from an unexpected runtime exception
+
+When a retry happens:
+
+- preserve both failed and successful attempts.
+
+# ================================================== 13. CHECKPOINT COMPATIBILITY
+
+Do not replace checkpointing with the new Run model.
+
+Run/event history and checkpoints have different purposes.
+
+Checkpoint:
+"Where can I resume?"
+
+Run:
+"What happened?"
+
+They should work together.
+
+If necessary, include the run_id or relevant event position in checkpoint
+metadata so resumed execution can remain observable.
+
+Do not redesign checkpointing unless required.
+
+# ================================================== 14. TESTS
+
+Add focused tests.
+
+At minimum:
+
+### Test 1 — Run starts and completes
+
+Verify:
+
+- run exists
+- status becomes completed
+- start/end information exists
+- completion event exists
+
+### Test 2 — Step lifecycle events
+
+Verify:
+
+    step_started
+    step_completed
+
+are emitted in the correct order.
+
+### Test 3 — Step failure
+
+Verify:
+
+    step_started
+    step_failed
+
+and the failure information is retained.
+
+### Test 4 — Retry history
+
+A failing step that retries should produce events for BOTH attempts.
+
+### Test 5 — Goto/recovery history
+
+Example:
 
     A -> B -> C
-          ^    |
-          |____|
+         ↑    |
+         └────|
 
-If C fails and recovery says B:
+Verify the event stream contains the actual:
 
-    A -> B -> C -> B -> C
+    A
+    B
+    C
+    B
+    C
 
-### Test 6: Agent cannot bypass Flow
+trajectory.
 
-Create a fake agent that attempts to request/return a destination that would skip a step.
+### Test 6 — Transition event
 
-Prove that Lantern does not blindly follow it.
+Verify source, target, reason, and attempt.
 
-### Test 7: Contract failure
+### Test 7 — Contract failure
 
-Agent output fails the contract.
+Verify contract failure is represented distinctly from an arbitrary exception.
 
-Expected:
+### Test 8 — Failed run
 
-    flow does not advance as if successful.
+Verify run_failed and final status.
 
-### Test 8: Rules are attached to the correct step
+### Test 9 — Event ordering
 
-Verify that a step receives its declared rules/skills through ExecutionContext.
+Verify events are strictly ordered for one run.
 
-### Test 9: Trace records transitions
+### Test 10 — Summary
 
-Verify source, destination, reason, and attempt.
+Verify derived summary metrics match the actual event stream.
 
-### Test 10: Existing compatibility
+### Test 11 — Existing compatibility
 
-All existing Lantern tests must still pass.
+All existing tests must continue to pass.
 
-==================================================
-16. DO NOT DO THESE THINGS
-==================================================
+# ================================================== 15. IMPORTANT DESIGN CONSTRAINT
 
-Do NOT:
+Do not turn Lantern into an event-sourcing framework.
 
-- implement YAML yet
-- implement a visual editor
-- implement memory learning
-- implement experience extraction
-- implement automatic workflow generation
-- add another orchestration LLM
-- make an LLM decide whether a transition is legal
-- rewrite the existing Runtime from scratch
-- introduce unnecessary dependencies
-- build a giant state-machine framework
-- break the current Step/Flow API unnecessarily
-- turn Lantern into a coding-agent sandbox
+We only need a clean event history for observability.
 
-This task is about one thing:
+Keep the implementation small and understandable.
 
-MAKE FLOW AUTHORITATIVE.
+Do not introduce Kafka, Redis Streams, OpenTelemetry, databases, or other
+infrastructure just for this feature.
 
-==================================================
-17. DESIGN TARGET
-==================================================
+An in-memory event collector is sufficient for now.
 
-The resulting architecture should conceptually look like:
+The architecture should leave room for a future persistent exporter.
 
-                FLOW
-                 |
-        +--------+--------+
-        |        |        |
-       A        B        C
-        |        |
-        |        +----> D
-        |
-      Runtime
-        |
-        v
-   Current Step
-        |
-        v
-      Agent
-        |
-        v
-      Output
-        |
-        v
-    Verification
-        |
-     +--+--+
-     |     |
-   pass   fail
-     |     |
-     v     v
- Transition Retry/Recovery
-     |
-     v
-Next legal Step
+For example, conceptually:
 
-The key point:
+    Runtime
+       ↓
+    EventEmitter
+       ↓
+    EventSink
 
-    Agent output != workflow control.
+Current sink:
+InMemoryEventSink
 
-    Flow + Runtime = workflow control.
+Future possibilities:
+JSONL
+OpenTelemetry
+database
+web UI
+remote collector
 
-==================================================
-18. SUCCESS CRITERIA
-==================================================
+Do not implement those future sinks now.
 
-When you are finished, I should be able to define something conceptually like:
+# ================================================== 16. FUTURE EXECUTION GRAPH REQUIREMENT
 
-    A -> B -> C
+Keep this future use case in mind:
 
-and know that Lantern guarantees:
+We will later build a Lantern UI that displays an execution graph while a
+run is happening.
 
-- A executes before B
-- B executes before C
-- C cannot execute before B
-- an agent cannot silently skip B
-- invalid transitions are rejected
-- valid recovery transitions work
-- contracts can prevent advancement
-- rules/skills are attached to the relevant step
-- transitions are observable
-- execution state can be checkpointed/resumed
+The UI will receive events such as:
 
-The important test is:
+    step_started
+    step_completed
+    step_failed
+    transition
+    retry_started
+    run_completed
 
-"If I give Lantern a 13-step flow, can I trust Lantern to execute the declared flow even if the LLM tries to skip around?"
+and progressively construct the visualization.
 
-The answer should become YES because the runtime enforces the graph, rather than because the prompt tells the LLM to behave.
+During execution:
 
-==================================================
-19. FINAL REPORT
-==================================================
+    RUNNING
+
+After execution:
+
+    COMPLETED / FAILED / REJECTED
+
+The graph should represent what ACTUALLY happened.
+
+Therefore:
+
+    Runtime event stream
+            ↓
+       execution graph
+            ↓
+          UI
+
+NOT:
+
+    Runtime
+       ↓
+    scrape logs
+       ↓
+    guess graph
+
+The event model is the API boundary for that future UI.
+
+# ================================================== 17. DO NOT BUILD THESE YET
+
+Do NOT implement:
+
+- execution graph UI
+- React frontend
+- web dashboard
+- YAML flows
+- visual flow editor
+- memory
+- experience
+- learning
+- autonomous flow generation
+- advanced state-machine features
+- complex event infrastructure
+- external event databases
+
+This task is ONLY:
+
+    Run
+    +
+    Structured Events
+    +
+    Run Summary
+    +
+    Graph-ready execution history
+
+# ================================================== 18. SUCCESS CRITERIA
+
+When this is complete, I should be able to run:
+
+    run = runtime.run(my_agent)
+
+and reliably answer:
+
+    What happened?
+
+    Which steps ran?
+
+    In what order?
+
+    Which steps failed?
+
+    Which attempts were retries?
+
+    Which transitions actually happened?
+
+    Why did recovery happen?
+
+    Did a contract fail?
+
+    Did a human approval occur?
+
+    Did the run complete or fail?
+
+    How long did it take?
+
+And a future UI should be able to answer all of those questions using the
+structured Run/Event data without inspecting internal Runtime implementation.
+
+# ================================================== 19. FINAL REPORT
 
 After implementation:
 
-1. Summarize the architecture changes.
-2. List the new/modified public APIs.
-3. Explain how Flow enforcement prevents skipped steps.
-4. Explain how Goto/recovery works.
-5. Explain how rules/skills are scoped to steps.
-6. List all tests added.
-7. Run the complete existing test suite.
-8. Report exact test results.
-9. Report any backwards-compatibility concerns.
-10. Do NOT move on to YAML, evaluation, memory, or experience unless the existing architecture absolutely requires a minimal change for this task.
+1. Explain the Run abstraction.
+2. Explain the Event model.
+3. Explain how it integrates with existing tracing.
+4. Explain how retries/Goto/contracts appear in the event stream.
+5. Explain how the future execution graph can consume the events.
+6. List modified files.
+7. List tests added.
+8. Run the complete test suite.
+9. Report exact test results.
+10. Report any compatibility concerns.
 
-Focus on correctness and a clean foundation over adding lots of features.
-```
+Keep the implementation focused.
+
+The goal is NOT to make Lantern better at constructing agent graphs.
+
+The goal is to make Lantern exceptionally good at answering:
+
+    "What actually happened during this agent run?"

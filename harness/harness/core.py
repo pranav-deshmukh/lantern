@@ -8,13 +8,15 @@ import time
 import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 
 from .context import ExecutionContext, load_context_files
-from .contracts import Contract, validate_value
+from .contracts import Contract, ContractViolationError, validate_value
+from .events import Run
 from .governance import PolicyDecision, PolicyEngine, PolicyViolation
 from .routing import Goto
 from .tracing import Tracer
@@ -141,7 +143,14 @@ class Step:
             raise TypeError("policy_engine must be a PolicyEngine instance.")
         return replace(self, governed_action=action, policy_engine=policy_engine)
 
-    def execute(self, value: Any, *, _context: ExecutionContext | None = None) -> Any:
+    def execute(
+        self,
+        value: Any,
+        *,
+        _context: ExecutionContext | None = None,
+        _event_emitter: Callable[[str, str | None, int | None, dict[str, Any]], None]
+        | None = None,
+    ) -> Any:
         """Run the wrapped function.
 
         The user's input is passed through unchanged. A function that declares
@@ -149,7 +158,7 @@ class Step:
         keyword argument (``function(value, context=context)``); otherwise it
         is called with ``value`` only, exactly as before.
         """
-        self._check_governance()
+        self._check_governance(_event_emitter)
 
         if _context is None:
             _context = self.build_context()
@@ -192,11 +201,30 @@ class Step:
             skills=load_context_files(self.skills_files) if self.skills_files else None,
         )
 
-    def _check_governance(self) -> None:
+    def _check_governance(
+        self,
+        event_emitter: Callable[[str, str | None, int | None, dict[str, Any]], None]
+        | None = None,
+    ) -> None:
         if self.policy_engine is None or self.governed_action is None:
             return
         if self.policy_engine.check(self.governed_action) is PolicyDecision.REQUIRES_APPROVAL:
-            if not self.policy_engine.request_approval(self.governed_action):
+            if event_emitter is not None:
+                event_emitter(
+                    "human_approval_requested",
+                    self.name,
+                    None,
+                    {"action": self.governed_action},
+                )
+            approved = self.policy_engine.request_approval(self.governed_action)
+            if event_emitter is not None:
+                event_emitter(
+                    "human_approval_received",
+                    self.name,
+                    None,
+                    {"action": self.governed_action, "approved": bool(approved)},
+                )
+            if not approved:
                 raise PolicyViolation(self.name, self.governed_action)
 
 
@@ -332,29 +360,60 @@ class Runtime:
         self.checkpoint_path = Path(checkpoint_path)
         self.run_id = run_id or str(uuid.uuid4())
         self.tracer = Tracer(trace_path)
+        self.last_run: Run | None = None
 
     def run(self, flow: Flow, initial_input: Any) -> Any:
-        """Run ``flow`` from its start or resume it from this runtime's checkpoint.
+        """Run ``flow`` and return its final value.
 
-        Lantern owns the current step. Ordinary advancement is positional
-        (``index + 1``); ``Goto`` targets are validated against the flow's
-        declared transitions and rejected deterministically if illegal.
+        The final value is returned for backwards compatibility. The complete
+        execution record (status, result, error, timing, and ordered events)
+        is available afterwards as ``runtime.last_run``.
         """
         if not isinstance(flow, Flow):
             raise TypeError("flow must be a Flow instance.")
 
+        run = Run(
+            run_id=self.run_id,
+            flow=flow,
+            status="running",
+            started_at=datetime.now(timezone.utc).isoformat(),
+        )
+        self.last_run = run
         self.state = ExecutionState(flow=flow, run_id=self.run_id, status="running")
+        run.emit("run_started")
 
         try:
-            return self._run_flow(flow, initial_input)
-        except IllegalTransitionError:
+            result = self._run_flow(flow, initial_input, run)
+        except IllegalTransitionError as error:
+            run.status = "rejected"
+            run.finished_at = datetime.now(timezone.utc).isoformat()
+            run.error = error
+            run.emit(
+                "run_failed",
+                data={"reason": "illegal_transition", "error": str(error)},
+            )
+            self.state.status = "rejected"
             raise
-        except BaseException:
+        except BaseException as error:
+            run.status = "failed"
+            run.finished_at = datetime.now(timezone.utc).isoformat()
+            run.error = error
+            run.emit(
+                "run_failed",
+                data={"error": f"{type(error).__name__}: {error}"},
+            )
             if self.state.status == "running":
                 self.state.status = "failed"
             raise
 
-    def _run_flow(self, flow: Flow, initial_input: Any) -> Any:
+        run.status = "completed"
+        run.finished_at = datetime.now(timezone.utc).isoformat()
+        run.result = result
+        run.emit("run_completed")
+        self.state.status = "completed"
+        return result
+
+    def _run_flow(self, flow: Flow, initial_input: Any, run: Run) -> Any:
         resume = self._resume_state(flow, initial_input)
         if resume.next_index is None:
             self.state.status = "completed"
@@ -376,13 +435,20 @@ class Runtime:
 
         self.state.current_step = flow.steps[index].name
         self.state.previous_step = previous_step
+        run.emit(
+            "transition",
+            step=flow.steps[index].name,
+            attempt=1,
+            data={"source": previous_step, "target": flow.steps[index].name, "reason": reason},
+        )
 
         while True:
             step = flow.steps[index]
 
-            value = self._execute_with_retries(
+            value, completed_attempt = self._execute_with_retries(
                 step,
                 value,
+                run=run,
                 previous_step=previous_step,
                 reason=reason,
             )
@@ -393,6 +459,12 @@ class Runtime:
                     self.state.status = "rejected"
                     self.state.transition_history.append(
                         TransitionRecord(step.name, target, "rejected")
+                    )
+                    run.emit(
+                        "transition",
+                        step=step.name,
+                        attempt=completed_attempt,
+                        data={"source": step.name, "target": target, "reason": "rejected"},
                     )
                     raise IllegalTransitionError(step.name, target)
 
@@ -415,6 +487,18 @@ class Runtime:
                 self.state.transition_history.append(
                     TransitionRecord(step.name, target, "goto")
                 )
+                run.emit(
+                    "goto",
+                    step=step.name,
+                    attempt=completed_attempt,
+                    data={"target": target},
+                )
+                run.emit(
+                    "transition",
+                    step=target,
+                    attempt=1,
+                    data={"source": step.name, "target": target, "reason": "goto"},
+                )
 
                 previous_step = step.name
                 reason = "goto"
@@ -427,6 +511,16 @@ class Runtime:
                         self.state.status = "rejected"
                         self.state.transition_history.append(
                             TransitionRecord(step.name, next_name, "rejected")
+                        )
+                        run.emit(
+                            "transition",
+                            step=step.name,
+                            attempt=completed_attempt,
+                            data={
+                                "source": step.name,
+                                "target": next_name,
+                                "reason": "rejected",
+                            },
                         )
                         raise IllegalTransitionError(step.name, next_name)
 
@@ -446,6 +540,13 @@ class Runtime:
                         step.name, flow.steps[index + 1].name, "sequential"
                     )
                 )
+                next_name = flow.steps[index + 1].name
+                run.emit(
+                    "transition",
+                    step=next_name,
+                    attempt=1,
+                    data={"source": step.name, "target": next_name, "reason": "sequential"},
+                )
                 previous_step = step.name
                 reason = "sequential"
                 index = index + 1
@@ -458,9 +559,10 @@ class Runtime:
         step: Step,
         value: Any,
         *,
+        run: Run,
         previous_step: str | None = None,
         reason: str = "start",
-    ) -> Any:
+    ) -> tuple[Any, int]:
         """Execute one step, allowing the initial attempt plus max_retries retries."""
         context = step.build_context()
         context_files = context.audit_entries()
@@ -474,27 +576,86 @@ class Runtime:
                 "reason": reason,
                 "attempt": attempt,
             }
+            started_at = time.perf_counter()
+            run.emit("step_started", step=step.name, attempt=attempt)
             try:
-                return self.tracer.execute(
+                result = self.tracer.execute(
                     run_id=self.run_id,
                     step_name=step.name,
                     input_value=value,
-                    operation=lambda: step.execute(value, _context=context),
+                    operation=lambda: step.execute(
+                        value,
+                        _context=context,
+                        _event_emitter=lambda event_type, event_step, event_attempt, data: run.emit(
+                            event_type,
+                            step=event_step,
+                            attempt=event_attempt or attempt,
+                            data=data,
+                        ),
+                    ),
                     reached_via_jump=reached_via_jump,
                     jumped_from=jumped_from,
                     context_files=context_files,
                     transition=transition,
                 )
+                run.emit(
+                    "step_completed",
+                    step=step.name,
+                    attempt=attempt,
+                    data={"duration_ms": self._duration_ms(started_at)},
+                )
+                return result, attempt
             except PolicyViolation:
                 # A denied approval is terminal; retrying cannot change it.
+                run.emit(
+                    "step_failed",
+                    step=step.name,
+                    attempt=attempt,
+                    data={
+                        "reason": "policy_violation",
+                        "error": "PolicyViolation",
+                        "duration_ms": self._duration_ms(started_at),
+                    },
+                )
                 raise
             except Exception as error:
+                duration_ms = self._duration_ms(started_at)
+                if isinstance(error, ContractViolationError):
+                    run.emit(
+                        "contract_failed",
+                        step=step.name,
+                        attempt=attempt,
+                        data={"direction": error.direction, "error": str(error)},
+                    )
+                    reason = "contract_failure"
+                else:
+                    reason = "exception"
+                run.emit(
+                    "step_failed",
+                    step=step.name,
+                    attempt=attempt,
+                    data={
+                        "reason": reason,
+                        "error": f"{type(error).__name__}: {error}",
+                        "duration_ms": duration_ms,
+                    },
+                )
                 if attempt == self.max_retries + 1:
                     raise StepExecutionError(step.name, attempt, error) from error
+                run.emit(
+                    "retry_started",
+                    step=step.name,
+                    attempt=attempt + 1,
+                    data={"previous_attempt": attempt, "reason": reason},
+                )
                 time.sleep(self.retry_delay)
 
         # The loop always returns or raises; this is only for type checkers.
         raise AssertionError("unreachable")
+
+    @staticmethod
+    def _duration_ms(started_at: float) -> float:
+        return round((time.perf_counter() - started_at) * 1000, 3)
 
     def _resume_state(self, flow: Flow, initial_input: Any) -> _ResumeState:
         """Return the next step, its input, and jump bookkeeping.
