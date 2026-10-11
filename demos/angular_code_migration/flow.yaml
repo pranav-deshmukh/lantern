@@ -1,0 +1,64 @@
+# Human-readable Lantern flow for this Cursor migration demo.
+#
+# The executable flow is currently built in run_cursor_migration_flow.py because
+# IDE handoff steps are opt-in Python callables. This YAML mirrors that flow so
+# you can see the agent, skill, and rule wiring in one place.
+
+run:
+  entrypoint: migration-orchestrator
+  checkpoint: .lantern/cursor-migration.checkpoint.json
+  trace: .lantern/cursor-migration.trace.jsonl
+
+steps:
+  - name: migration-orchestrator
+    type: cursor_handoff_orchestrator
+    agent: .cursor/agents/migration-orchestrator.md
+    skills:
+      - .cursor/skills/analysis-skill.md
+      - .cursor/skills/angular-migrator-skill.md
+    valid_next_steps:
+      - legacy-analyzer
+      - code-migrator
+
+  - name: legacy-analyzer
+    type: cursor_handoff
+    agent: .cursor/agents/legacy-analyzer.md
+    skills:
+      - .cursor/skills/analysis-skill.md
+    expected_outputs:
+      - migration-analysis.md
+
+  - name: code-migrator
+    type: cursor_handoff
+    agent: .cursor/agents/code-migrator.md
+    skills:
+      - .cursor/skills/angular-migrator-skill.md
+    rules:
+      - .cursor/rules/angular-migration-rules.md
+    expected_outputs:
+      - modern-angular/
+
+  - name: deterministic-migration-check
+    type: pattern_check
+    retry_target: code-migrator
+    rules:
+      - name: no-angularjs-api
+        mode: forbid
+        glob: modern-angular/**
+        pattern: 'angular\.module|ng-controller|\$scope|\$http|\$q|\$timeout'
+      - name: readme-documents-cli-wiring
+        mode: require
+        glob: modern-angular/README.md
+        pattern: 'Angular CLI|CLI'
+
+transitions:
+  - from: migration-orchestrator
+    to: legacy-analyzer
+  - from: migration-orchestrator
+    to: code-migrator
+  - from: legacy-analyzer
+    to: code-migrator
+  - from: code-migrator
+    to: deterministic-migration-check
+  - from: deterministic-migration-check
+    to: code-migrator

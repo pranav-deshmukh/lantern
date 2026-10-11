@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en" ng-app="legacyJiraBoard">
+<head>
+  <meta charset="utf-8">
+  <title>Legacy Sprint Board</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.7.9/angular.min.js"></script>
+  <script src="app/app.module.js"></script>
+  <script src="app/services/board-api.service.js"></script>
+  <script src="app/services/workflow.service.js"></script>
+  <script src="app/filters/issue-filters.js"></script>
+  <script src="app/directives/swimlane.directive.js"></script>
+  <script src="app/directives/issue-card.directive.js"></script>
+  <script src="app/controllers/board.controller.js"></script>
+  <script src="app/controllers/backlog.controller.js"></script>
+</head>
+<body ng-controller="BoardController as board">
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">Legacy AngularJS 1.x</p>
+      <h1>{{ board.project.name }} Sprint Board</h1>
+    </div>
+    <div class="toolbar">
+      <input
+        ng-model="board.filters.query"
+        ng-change="board.persistFilters()"
+        placeholder="Search key, title, assignee">
+      <select ng-model="board.filters.assignee" ng-change="board.persistFilters()">
+        <option value="">All assignees</option>
+        <option ng-repeat="member in board.project.members" value="{{ member.id }}">
+          {{ member.name }}
+        </option>
+      </select>
+      <button ng-click="board.refresh()">Refresh</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="board">
+      <swimlane
+        ng-repeat="lane in board.lanes"
+        lane="lane"
+        issues="board.issues | byStatus:lane.status | issueSearch:board.filters"
+        on-move="board.moveIssue(issue, targetStatus)"
+        on-select="board.selectIssue(issue)">
+      </swimlane>
+    </section>
+
+    <aside class="inspector" ng-if="board.selected">
+      <button class="close" ng-click="board.selected = null">x</button>
+      <p class="eyebrow">{{ board.selected.key }}</p>
+      <h2>{{ board.selected.title }}</h2>
+      <dl>
+        <dt>Priority</dt>
+        <dd>{{ board.selected.priority }}</dd>
+        <dt>Assignee</dt>
+        <dd>{{ board.assigneeName(board.selected.assigneeId) }}</dd>
+        <dt>Estimate</dt>
+        <dd>{{ board.selected.points }} points</dd>
+      </dl>
+      <h3>Checklist</h3>
+      <label ng-repeat="item in board.selected.checklist">
+        <input type="checkbox" ng-model="item.done" ng-change="board.recalculateProgress(board.selected)">
+        {{ item.label }}
+      </label>
+      <progress max="100" value="{{ board.selected.progress }}"></progress>
+      <textarea ng-model="board.selected.notes" ng-blur="board.saveIssue(board.selected)"></textarea>
+    </aside>
+  </main>
+
+  <section class="backlog" ng-controller="BacklogController as backlog">
+    <h2>Backlog Grooming</h2>
+    <div class="backlog-grid">
+      <article ng-repeat="epic in backlog.epics">
+        <h3>{{ epic.name }}</h3>
+        <p>{{ epic.description }}</p>
+        <button ng-click="backlog.promoteEpic(epic)">Promote to sprint</button>
+      </article>
+    </div>
+  </section>
+</body>
+</html>

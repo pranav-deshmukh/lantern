@@ -1,0 +1,107 @@
+{
+  "project": {
+    "name": "Atlas",
+    "members": [
+      { "id": "mira", "name": "Mira Patel" },
+      { "id": "jon", "name": "Jon Bell" },
+      { "id": "sana", "name": "Sana Iqbal" },
+      { "id": "leo", "name": "Leo Hart" }
+    ]
+  },
+  "lanes": [
+    { "status": "todo", "label": "To Do" },
+    { "status": "in-progress", "label": "In Progress" },
+    { "status": "review", "label": "Review" },
+    { "status": "done", "label": "Done" }
+  ],
+  "issues": [
+    {
+      "id": 101,
+      "key": "ATL-101",
+      "type": "Story",
+      "title": "Bulk edit assignees",
+      "summary": "Allow project leads to reassign selected issues in one action.",
+      "status": "todo",
+      "priority": "High",
+      "assigneeId": "mira",
+      "points": 8,
+      "progress": 33,
+      "notes": "Needs keyboard flow.",
+      "checklist": [
+        { "label": "Design service contract", "done": true },
+        { "label": "Build selection model", "done": false },
+        { "label": "Add audit event", "done": false }
+      ]
+    },
+    {
+      "id": 102,
+      "key": "ATL-102",
+      "type": "Bug",
+      "title": "Sprint velocity chart flickers",
+      "summary": "Chart redraws on every board filter change.",
+      "status": "in-progress",
+      "priority": "Medium",
+      "assigneeId": "jon",
+      "points": 3,
+      "progress": 66,
+      "notes": "Probably digest-loop related.",
+      "checklist": [
+        { "label": "Reproduce with filters", "done": true },
+        { "label": "Throttle redraw", "done": true },
+        { "label": "Add regression test", "done": false }
+      ]
+    },
+    {
+      "id": 103,
+      "key": "ATL-103",
+      "type": "Task",
+      "title": "Epic health badges",
+      "summary": "Show delivery risk badges on each epic card.",
+      "status": "review",
+      "priority": "Low",
+      "assigneeId": "sana",
+      "points": 5,
+      "progress": 90,
+      "notes": "Review copy with PM.",
+      "checklist": [
+        { "label": "Calculate blocked ratio", "done": true },
+        { "label": "Add badge colors", "done": true },
+        { "label": "Document threshold", "done": false }
+      ]
+    },
+    {
+      "id": 104,
+      "key": "ATL-104",
+      "type": "Story",
+      "title": "Release burndown export",
+      "summary": "Export burndown data as CSV for stakeholder reviews.",
+      "status": "blocked",
+      "priority": "High",
+      "assigneeId": "leo",
+      "points": 13,
+      "progress": 20,
+      "notes": "Waiting on analytics schema.",
+      "checklist": [
+        { "label": "Agree CSV columns", "done": true },
+        { "label": "Implement export service", "done": false },
+        { "label": "Validate large releases", "done": false }
+      ]
+    },
+    {
+      "id": 105,
+      "key": "ATL-105",
+      "type": "Bug",
+      "title": "Checklist progress can divide by zero",
+      "summary": "Imported issues without checklist items show NaN progress.",
+      "status": "done",
+      "priority": "Medium",
+      "assigneeId": "mira",
+      "points": 2,
+      "progress": 100,
+      "notes": "Patched in legacy code.",
+      "checklist": [
+        { "label": "Guard empty checklist", "done": true }
+      ]
+    }
+  ]
+}

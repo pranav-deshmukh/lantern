@@ -151,6 +151,12 @@ demos/**/node_modules/
 demos/**/dist/
 demos/**/build/
 demos/**/.next/
+demos/**/.angular/
+
+# Angular migration demo runtime outputs
+demos/angular_code_migration/.lantern/
+demos/angular_code_migration/migration-analysis.md
+demos/angular_code_migration/modern-angular/
 
 # React migration generated artifacts
 demos/react_migration/traces/*
