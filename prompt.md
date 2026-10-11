@@ -1,692 +1,278 @@
-You are working on Lantern, an open-source Python agent runtime.
-
-IMPORTANT CONTEXT:
-
-Lantern is NOT intended to become another LangGraph.
-
-LangGraph / agent frameworks can own:
-
-- agent reasoning
-- agent state
-- agent routing
-- internal graph construction
-
-Lantern is the operational runtime underneath agents.
-
-Lantern's responsibility is:
-
-- reliable execution
-- validation
-- retries
-- recovery
-- checkpoint/resume
-- governance
-- tracing
-- auditability
-- observability
-- evaluation
-
-We have already implemented:
-
-- Step
-- Flow
-- Runtime
-- Agent integration
-- ExecutionContext
-- Contracts
-- Retry
-- Goto/recovery
-- Checkpointing
-- Governance
-- Tracing
-- explicit transition validation
-- rejection of undeclared transitions when explicit transitions are defined
-
-Do NOT turn Lantern into a more sophisticated graph orchestration framework.
-
-==================================================
-TASK: BUILD THE RUN + STRUCTURED EVENT FOUNDATION
-==================================================
-
-The next major capability is observability.
-
-We eventually want a UI that shows a live execution graph generated from the actual runtime execution.
-
-For example, during a run:
-
-    ┌──────────┐
-    │ classify │ ✓
-    └────┬─────┘
-         ↓
-    ┌──────────┐
-    │  draft   │ ✓
-    └────┬─────┘
-         ↓
-    ┌──────────────┐
-    │ quality_check│ ✗
-    └──────┬───────┘
-           ↓
-         retry
-           ↓
-    ┌──────────┐
-    │  draft   │ ↻
-    └────┬─────┘
-         ↓
-    ┌──────────────┐
-    │ quality_check│ ✓
-    └──────────────┘
-
-After completion, the same execution graph should contain the complete
-history of what actually happened.
-
-IMPORTANT:
-
-The future UI must NOT have to infer the execution graph by inspecting
-random logs, checkpoints, or agent output.
-
-The Runtime should emit structured events that are sufficient to reconstruct
-the execution timeline and graph.
-
-==================================================
-
-1. # FIRST INSPECT THE EXISTING CODE
-
-Before changing anything:
-
-- inspect Runtime
-- inspect Flow
-- inspect Step
-- inspect tracing
-- inspect checkpointing
-- inspect Goto
-- inspect contracts
-- inspect ExecutionContext
-- inspect all existing tests
-
-Do not create a second tracing system if the existing tracing architecture
-can be evolved.
-
-Do not rewrite the Runtime.
-
-Preserve the current public API wherever possible.
-
-Run the existing tests before changing anything.
-
-# ================================================== 2. INTRODUCE A FIRST-CLASS RUN
-
-We need a coherent representation of one Runtime execution.
-
-Conceptually:
-
-    Run
-      ├── run_id
-      ├── flow / agent identity
-      ├── status
-      ├── started_at
-      ├── finished_at
-      ├── result
-      ├── error
-      ├── events
-      └── execution metadata
-
-The exact API should fit Lantern's current architecture.
-
-Possible statuses:
-
-    running
-    completed
-    failed
-    rejected
-    interrupted
-
-Do not overengineer this.
-
-The purpose of Run is to provide a coherent record of one execution.
-
-# ================================================== 3. STRUCTURED EVENTS
-
-Every important runtime action should produce a structured event.
-
-At minimum support:
-
-    run_started
-    step_started
-    step_completed
-    step_failed
-    contract_failed
-    retry_started
-    transition
-    goto
-    human_approval_requested
-    human_approval_received
-    run_completed
-    run_failed
-
-Use the existing tracing implementation where possible.
-
-Do not create two competing event/tracing concepts.
-
-If the existing trace model can become the event model, evolve it.
-
-# ================================================== 4. EVENT SCHEMA
-
-Create a stable structured event representation.
-
-Conceptually:
-
-    Event(
-        event_id,
-        run_id,
-        type,
-        timestamp,
-        step,
-        attempt,
-        data
-    )
-
-The exact names/types can differ if the existing code has better conventions.
-
-Important properties:
-
-- events belong to a run
-- events are ordered
-- events are immutable after emission
-- event type is explicit
-- event data is structured
-- events contain enough information for future UI rendering
-
-Do not store giant unstructured log strings as the primary representation.
-
-# ================================================== 5. STEP EVENTS
-
-For every step execution, record enough information to reconstruct:
-
-    step started
-    step completed / failed
-    duration
-    attempt number
-    error/contract failure when applicable
-
-Example conceptual event:
-
-    {
-        "type": "step_started",
-        "run_id": "...",
-        "step": "quality_check",
-        "attempt": 1
-    }
-
-and:
-
-    {
-        "type": "step_failed",
-        "run_id": "...",
-        "step": "quality_check",
-        "attempt": 1,
-        "reason": "contract_failed"
-    }
-
-Do not expose sensitive input/output automatically in events.
-
-Avoid dumping arbitrary user data into traces.
-
-# ================================================== 6. TRANSITION EVENTS
-
-A future execution graph will need to know which transitions actually
-occurred.
-
-Record:
-
-    source
-    target
-    reason
-    attempt
-
-Example:
-
-    {
-        "type": "transition",
-        "source": "quality_check",
-        "target": "draft",
-        "reason": "contract_failure",
-        "attempt": 1
-    }
-
-This should describe what Lantern actually executed.
-
-Do not generate graph edges by reading agent text.
-
-# ================================================== 7. RETRIES AND RECOVERY
-
-Make retries and Goto/recovery visible as runtime events.
-
-For example:
-
-    step_started(draft, attempt=1)
-    step_failed(draft, attempt=1)
-    retry_started(draft, attempt=2)
-    step_started(draft, attempt=2)
-    step_completed(draft, attempt=2)
-
-For Goto:
-
-    step_failed(quality_check)
-    transition(
-        source="quality_check",
-        target="draft",
-        reason="contract_failure"
-    )
-
-The event stream must preserve the actual order.
-
-# ================================================== 8. RUN RESULT
-
-At the end of Runtime execution, the caller should have access to the
-completed Run / execution result.
-
-Conceptually:
-
-    run = runtime.run(flow, input)
-
-    run.status
-    run.result
-    run.events
-    run.started_at
-    run.finished_at
-
-Do not necessarily change Runtime.run() to return exactly this if that would
-break the existing API.
-
-If backward compatibility requires keeping the current return value,
-introduce another clean mechanism for retrieving the Run.
-
-Do not break existing user code merely to add observability.
-
-# ================================================== 9. GRAPH-READY DATA, NOT GRAPH UI
-
-This task must prepare the runtime for a future execution graph UI.
-
-DO NOT build the UI now.
-
-DO NOT add React.
-
-DO NOT add a web server.
-
-DO NOT add a frontend dependency.
-
-DO NOT build a graph visualization library.
-
-Instead ensure the event model can later produce:
-
-    nodes:
-        classify
-        draft
-        quality_check
-        approve
-
-and actual execution edges:
-
-    classify -> draft
-    draft -> quality_check
-    quality_check -> draft
-    draft -> quality_check
-    quality_check -> approve
-
-The same step may appear multiple times in execution history.
-
-That is intentional.
-
-The UI will later distinguish:
-
-    declared Flow
-
-from:
-
-    actual execution trajectory
-
-This distinction is important.
-
-# ================================================== 10. DECLARED FLOW VS ACTUAL EXECUTION
-
-Do not confuse the Flow definition with the execution history.
-
-Flow says:
-
-    A -> B
-    B -> C
-    C -> D
-    C -> B
-
-Actual run might be:
-
-    A
-    B
-    C
-    B
-    C
-    D
-
-The future UI should be able to show both:
-
-    Declared Flow
-        +
-    Actual Run
-
-Therefore the event stream must represent actual execution.
-
-Do not mutate the Flow itself to represent execution.
-
-# ================================================== 11. RUN SUMMARY
-
-Provide a way to derive a summary from the event stream.
-
-Conceptually:
-
-    RunSummary(
-        status,
-        total_steps,
-        total_attempts,
-        retries,
-        recoveries,
-        failures,
-        contract_failures,
-        human_interventions,
-        duration
-    )
-
-Do not manually maintain dozens of counters throughout Runtime if they can
-be reliably derived from immutable events.
-
-Prefer:
-
-    events -> summary
-
-over duplicated mutable state.
-
-However, use reasonable judgment if some metrics are better maintained
-directly.
-
-# ================================================== 12. ERROR HANDLING
-
-When a run fails:
-
-- emit the appropriate failure event
-- preserve the original error
-- mark Run status correctly
-- do not lose events that occurred before failure
-
-When a run succeeds:
-
-- emit run_completed
-- preserve final result
-- preserve complete event history
-
-When a contract rejects output:
-
-- distinguish that from an unexpected runtime exception
-
-When a retry happens:
-
-- preserve both failed and successful attempts.
-
-# ================================================== 13. CHECKPOINT COMPATIBILITY
-
-Do not replace checkpointing with the new Run model.
-
-Run/event history and checkpoints have different purposes.
-
-Checkpoint:
-"Where can I resume?"
-
-Run:
-"What happened?"
-
-They should work together.
-
-If necessary, include the run_id or relevant event position in checkpoint
-metadata so resumed execution can remain observable.
-
-Do not redesign checkpointing unless required.
-
-# ================================================== 14. TESTS
-
-Add focused tests.
-
-At minimum:
-
-### Test 1 — Run starts and completes
-
-Verify:
-
-- run exists
-- status becomes completed
-- start/end information exists
-- completion event exists
-
-### Test 2 — Step lifecycle events
-
-Verify:
-
-    step_started
-    step_completed
-
-are emitted in the correct order.
-
-### Test 3 — Step failure
-
-Verify:
-
-    step_started
-    step_failed
-
-and the failure information is retained.
-
-### Test 4 — Retry history
-
-A failing step that retries should produce events for BOTH attempts.
-
-### Test 5 — Goto/recovery history
-
-Example:
-
-    A -> B -> C
-         ↑    |
-         └────|
-
-Verify the event stream contains the actual:
-
-    A
-    B
-    C
-    B
-    C
-
-trajectory.
-
-### Test 6 — Transition event
-
-Verify source, target, reason, and attempt.
-
-### Test 7 — Contract failure
-
-Verify contract failure is represented distinctly from an arbitrary exception.
-
-### Test 8 — Failed run
-
-Verify run_failed and final status.
-
-### Test 9 — Event ordering
-
-Verify events are strictly ordered for one run.
-
-### Test 10 — Summary
-
-Verify derived summary metrics match the actual event stream.
-
-### Test 11 — Existing compatibility
-
-All existing tests must continue to pass.
-
-# ================================================== 15. IMPORTANT DESIGN CONSTRAINT
-
-Do not turn Lantern into an event-sourcing framework.
-
-We only need a clean event history for observability.
-
-Keep the implementation small and understandable.
-
-Do not introduce Kafka, Redis Streams, OpenTelemetry, databases, or other
-infrastructure just for this feature.
-
-An in-memory event collector is sufficient for now.
-
-The architecture should leave room for a future persistent exporter.
-
-For example, conceptually:
-
-    Runtime
-       ↓
-    EventEmitter
-       ↓
-    EventSink
-
-Current sink:
-InMemoryEventSink
-
-Future possibilities:
-JSONL
-OpenTelemetry
-database
-web UI
-remote collector
-
-Do not implement those future sinks now.
-
-# ================================================== 16. FUTURE EXECUTION GRAPH REQUIREMENT
-
-Keep this future use case in mind:
-
-We will later build a Lantern UI that displays an execution graph while a
-run is happening.
-
-The UI will receive events such as:
-
-    step_started
-    step_completed
-    step_failed
-    transition
-    retry_started
-    run_completed
-
-and progressively construct the visualization.
-
-During execution:
-
-    RUNNING
-
-After execution:
-
-    COMPLETED / FAILED / REJECTED
-
-The graph should represent what ACTUALLY happened.
-
-Therefore:
-
-    Runtime event stream
-            ↓
-       execution graph
-            ↓
-          UI
-
-NOT:
-
-    Runtime
-       ↓
-    scrape logs
-       ↓
-    guess graph
-
-The event model is the API boundary for that future UI.
-
-# ================================================== 17. DO NOT BUILD THESE YET
-
-Do NOT implement:
-
-- execution graph UI
-- React frontend
-- web dashboard
-- YAML flows
-- visual flow editor
-- memory
-- experience
-- learning
-- autonomous flow generation
-- advanced state-machine features
-- complex event infrastructure
-- external event databases
-
-This task is ONLY:
-
-    Run
-    +
-    Structured Events
-    +
-    Run Summary
-    +
-    Graph-ready execution history
-
-# ================================================== 18. SUCCESS CRITERIA
-
-When this is complete, I should be able to run:
-
-    run = runtime.run(my_agent)
-
-and reliably answer:
-
-    What happened?
-
-    Which steps ran?
-
-    In what order?
-
-    Which steps failed?
-
-    Which attempts were retries?
-
-    Which transitions actually happened?
-
-    Why did recovery happen?
-
-    Did a contract fail?
-
-    Did a human approval occur?
-
-    Did the run complete or fail?
-
-    How long did it take?
-
-And a future UI should be able to answer all of those questions using the
-structured Run/Event data without inspecting internal Runtime implementation.
-
-# ================================================== 19. FINAL REPORT
-
-After implementation:
-
-1. Explain the Run abstraction.
-2. Explain the Event model.
-3. Explain how it integrates with existing tracing.
-4. Explain how retries/Goto/contracts appear in the event stream.
-5. Explain how the future execution graph can consume the events.
-6. List modified files.
-7. List tests added.
-8. Run the complete test suite.
-9. Report exact test results.
-10. Report any compatibility concerns.
-
-Keep the implementation focused.
-
-The goal is NOT to make Lantern better at constructing agent graphs.
-
-The goal is to make Lantern exceptionally good at answering:
-
-    "What actually happened during this agent run?"
+TASK: Implement "IDE handoff" for Lantern as a purely additive, opt-in
+subpackage. It lets any flow step be executed by a human running Cursor,
+Copilot, Claude Code or Codex (file-based, no API key, no automation of the
+IDE), adds an orchestrator-to-Goto bridge, and adds a generic deterministic
+check step that sends work back with the exact violations.
+
+PRODUCT RULE (most important): Lantern is multi-platform. Normal Python
+agents, API-driven agents and wrapped CLI agents must keep working exactly as
+they do today. This feature only exists for a user who imports it:
+
+    from harness import Harness, Flow, Step                  # unchanged
+    from harness.ide_handoff import make_ide_handoff_step    # opt-in
+
+A single Flow can mix worker types: a plain Python step, then a human
+handoff step, then a Python check step, with loop-back between them. A step
+is just a worker. Do NOT add any global "platform" or "cursor mode" switch.
+
+READ FIRST, follow exactly: harness/README.md and the root Readme.md
+"Contribution discipline". Narrow scope. Write failing tests first. Never
+weaken, edit or delete an existing passing test. Run the real test suite and
+paste its actual output before saying done. harness/ must never import from
+demos/.
+
+BEFORE WRITING CODE read: core.py (Step, Flow, Runtime, Transition,
+IllegalTransitionError, GotoTargetError), routing.py, context.py
+(ExecutionContext and how a step opts in via a `context` parameter),
+governance.py, and the existing tests and examples. Reuse what exists. Do not
+rebuild or duplicate anything. Do not touch harness/harness/agents_for_cursor/
+(the API-key path).
+
+ACCEPTED LIMITATION (do not try to fix; no code, comment or doc may imply
+otherwise): nothing here guarantees the agent read or obeyed the packet or
+bundled rules/skills. Lantern guarantees delivery, sequencing and an audit
+trail. Rule compliance is only ever established by deterministic check steps
+that inspect the result.
+
+ISOLATION REQUIREMENTS
+ - New code lives only in harness/harness/ide_handoff/ (with __init__.py).
+ - Do NOT modify harness/__init__.py. Do not re-export anything from the
+   top-level package.
+ - stdlib only. Imports allowed: the standard library and harness.* modules.
+   No new dependencies, no pyproject changes except none.
+ - Cross-platform: must work on Windows and Linux. Use pathlib, no shell, no
+   symlinks, no hardcoded path separators. Read artifacts as utf-8-sig so a
+   BOM written by a Windows editor does not break JSON parsing.
+
+MODULES
+
+1. ide_handoff/packet.py
+   compose_ide_packet(task, context=None, *, step_name, run_id, packet_id,
+   artifact_path, extra_instructions=None, invoke_hint=None, feedback=None)
+   -> str
+   One markdown string with, in order: step name, run id, packet_id,
+   invoke_hint (only if given), the exact artifact path to write, the bundled
+   rules/skills text (only if context is given and non-empty),
+   extra_instructions (only if given), feedback under a heading like "Fix
+   these before finishing" (only if given), then the task (json.dumps
+   indent=2, default=str unless already a str). The packet must instruct the
+   agent: write the result as a single JSON OBJECT to the exact artifact path,
+   include "packet_id" with the exact value above, and include
+   "changed_files" (list of workspace-relative paths) when it edited files.
+
+2. ide_handoff/agent.py
+   IdeHandoffConfig dataclass: workspace (str|Path), run_id (str),
+   packet_root (default ".lantern/handoff"), extra_instructions (str|None),
+   invoke_hint (str|None, static text such as "@migration-orchestrator
+   migrate page X", no templating), poll_seconds (float, default 1.0),
+   timeout_seconds (float|None, default None = wait forever),
+   partial_write_grace_seconds (float, default 2.0).
+   Note in the docstring: config.run_id must equal the run_id given to
+   Runtime, and the step_name must equal the Step's name, so resume finds the
+   same directory.
+   IdeHandoffError(RuntimeError), IdeHandoffTimeout(IdeHandoffError).
+
+   IdeHandoffStep(step_name, config, *, artifact_waiter=None, sleep=None,
+   clock=None, notify=None):
+   injectable sleep, clock and notify so tests never really sleep or print.
+   notify defaults to print.
+   - write_packet(task, context=None) -> Path: writes
+     <workspace>/<packet_root>/<run_id>/<step_name>/packet.md
+   - wait_for_artifact(...) -> dict: polls <same dir>/artifact.json
+   - run(task, context=None) -> Any: the function assigned as a Step's
+     `function`. It must work with zero changes to Step or Runtime
+     (including the `context` opt-in).
+   make_ide_handoff_step(step_name, config, **kwargs) -> Callable (the bound
+   run method, directly usable as Step(name, fn, rules_files=[...])).
+   new_run_id() -> short uuid4 hex.
+
+   INPUT CONVENTION: if the task passed to run() is a dict containing both
+   "task" and "feedback", treat "task" as the original task and "feedback" as
+   the retry feedback (rendered under the Fix-these heading). Any other input
+   is the task as-is. This is how check steps send work back, and it is what
+   prevents loop-backs from nesting payloads inside payloads.
+
+   RETURN SHAPE: the parsed artifact dict, plus one key added by Lantern:
+   "handoff": {"step_name", "packet_id", "original_task"}. Artifacts must be
+   JSON objects; any other JSON type raises IdeHandoffError naming the path.
+
+   STALE-ARTIFACT RULE (main design requirement; implement all of it). The
+   same step can be entered more than once in one run (a check step sends the
+   flow back with Goto) and a crashed run can be resumed. These must be told
+   apart.
+   a. Each fresh visit gets a new packet_id (uuid4 hex). A state file
+      <dir>/current.json records {packet_id, task_hash, consumed}. task_hash
+      is a stable hash of the full input (json.dumps sort_keys, default=str).
+      Write current.json atomically (temp file, then os.replace).
+   b. RESUME: on entry, if current.json exists with the same task_hash and
+      consumed == false, reuse that packet_id and do not write a new packet
+      (if packet.md is missing, rewrite it with the same packet_id). An
+      artifact that already exists for that packet_id is accepted, so work
+      finished while the process was down is picked up.
+   c. NEW VISIT: otherwise (no state, different task_hash, or consumed ==
+      true) generate a new packet_id and write a new packet. Identical task
+      text on a later visit is still a new visit once consumed == true.
+   d. Accept an artifact only if its "packet_id" equals the current packet_id.
+      A parsed artifact with a different packet_id is stale: ignore it and
+      keep waiting. An artifact with no "packet_id" raises IdeHandoffError
+      naming the artifact path and saying the field is required (agent
+      non-compliance must be loud, not silently waited on).
+   e. After a matching artifact is read, set consumed = true and rename the
+      artifact to artifact.consumed-<packet_id>.json so a later visit can
+      never read it. Use os.replace; on PermissionError (a Windows editor may
+      briefly hold the file) retry a few times using the injected sleep, then
+      raise IdeHandoffError naming the path.
+   f. Known window: if the process dies after reading the artifact but before
+      Runtime writes its checkpoint, the resumed step starts a new visit and
+      waits again. That fails safe (waits) rather than returning stale data.
+      Document this in a code comment. Do not try to remove it.
+   g. Partial writes: invalid JSON is "not ready yet". Re-poll until
+      partial_write_grace_seconds have elapsed (injected clock) since the file
+      first appeared, then raise IdeHandoffError naming the artifact path.
+   h. Timeout: raise IdeHandoffTimeout naming the artifact path.
+   i. When a new visit starts waiting, call notify(...) once with: step name,
+      packet path, expected artifact path, and invoke_hint if set.
+
+3. ide_handoff/handoff_decision.py
+   HandoffDecisionError(ValueError).
+   goto_from_handoff(artifact: dict, *, valid_step_names: set[str]) -> Goto
+   Expects artifact["next_step"] (str) and optional artifact["payload"]. If
+   payload is absent, the payload is the artifact without the keys
+   "next_step", "packet_id" and "handoff" (document this). If next_step is not
+   in valid_step_names raise HandoffDecisionError naming the invalid value AND
+   the valid set. Never fall back to a default step.
+   make_orchestrator_step(step_name, config, valid_step_names, **kwargs) ->
+   Callable: IdeHandoffStep.run composed with goto_from_handoff, returning a
+   validated Goto.
+
+4. ide_handoff/checks.py (generic deterministic verification; this is where
+   rule compliance is actually checked)
+   PatternRule(name, pattern (regex string), mode ("forbid" or "require"),
+   glob (fnmatch pattern on the workspace-relative posix path), message=None).
+   Ship no domain-specific rules; callers define them.
+   make_pattern_check_step(rules, *, base_dir, retry_target,
+   files_key="changed_files", files_provider=None) -> Callable
+   Input is the dict returned by a handoff step. File list = files_provider(
+   input) if given, else input[files_key]. Provide files_provider so callers
+   can list files from a source they trust (for example git diff) instead of
+   the agent's self-report. Document that a self-reported list can omit files.
+   For each listed file matching a rule's glob (read as utf-8,
+   errors="replace"):
+   - forbid: every match is a violation (file, line number, rule name,
+     matched text, message)
+   - require: a file with no match is a violation (file, rule name, message)
+   A rule with no matching files produces no violation (document this).
+   A missing or unreadable file is itself a violation, never a crash.
+   No violations: return the input unchanged.
+   Violations: return Goto(retry_target, {"task": <input["handoff"][
+   "original_task"] if present else None>, "feedback": <readable multi-line
+   violation summary naming each file, line and rule>, "violations": [...]}).
+   This payload shape is exactly the handoff INPUT CONVENTION above. Pure
+   Python: no LLM, no subprocess, no network.
+
+5. ide_handoff/__init__.py exports: compose_ide_packet, IdeHandoffConfig,
+   IdeHandoffError, IdeHandoffTimeout, IdeHandoffStep, make_ide_handoff_step,
+   new_run_id, HandoffDecisionError, goto_from_handoff, make_orchestrator_step,
+   PatternRule, make_pattern_check_step.
+
+TESTS FIRST: harness/tests/test_ide_handoff.py, in the style of
+test_context.py and test_harness_facade.py. Use fake waiters, injected
+sleep/clock/notify, and tmp_path. Required tests:
+
+ Isolation
+ - `import harness` in a fresh subprocess (sys.executable) does not put
+   "harness.ide_handoff" in sys.modules.
+ - Every import in harness/ide_handoff/*.py (parsed with ast) is stdlib
+   (sys.stdlib_module_names) or harness.*.
+ - Hybrid flow through the real Runtime: a plain Python step, then a handoff
+   step with a fake waiter, then a pattern check step, all in one Flow; it
+   completes and the Python steps behave exactly as without the new package.
+
+ Packet
+ - Contains task, step name, packet_id, artifact path, invoke_hint when set.
+ - Omits the context section when context is None; includes bundled
+   rules/skills text when given; includes the feedback section only when
+   feedback is given.
+ - End to end through a real Flow + Runtime: rules_files content appears in
+   the written packet.md, and the written file contains the task text.
+
+ Stale / resume
+ - Visit 1 completes (artifact consumed). Visit 2 of the same step via a Goto
+   loop-back does NOT return visit 1's artifact; it waits and accepts the new
+   one. Cover both different task text and IDENTICAL task text.
+ - A stale artifact with a different packet_id is ignored, not returned.
+ - An artifact with no packet_id raises IdeHandoffError naming the path.
+ - A JSON array or string artifact raises IdeHandoffError naming the path.
+ - Resume: the wait is interrupted (waiter raises) before any artifact; call
+   again with the same input: same packet_id reused, packet.md not rewritten,
+   and an artifact written in the meantime for that packet_id is accepted.
+ - Artifact written with a UTF-8 BOM parses correctly.
+ - Rename retry: a simulated PermissionError on the first os.replace succeeds
+   on retry; persistent failure raises IdeHandoffError.
+
+ Partial write / timeout
+ - First poll sees truncated JSON, a later poll sees valid JSON: returns it.
+ - Truncated JSON that never completes raises IdeHandoffError after the grace
+   period (injected clock, no real sleep).
+ - Timeout raises IdeHandoffTimeout naming the artifact path and finishes in
+   well under a second.
+ - notify is called once per new visit with the packet and artifact paths.
+
+ Orchestrator
+ - goto_from_handoff: valid next_step gives the correct target and payload;
+   invalid next_step raises HandoffDecisionError naming both the bad value and
+   the valid set; the default payload excludes next_step, packet_id, handoff.
+ - make_orchestrator_step through a real three-step Flow + Runtime: the
+   artifact names the second step as next_step with a skip-the-first payload;
+   assert Runtime actually jumps there (same pattern as test_routing.py).
+ - If the Flow declares transitions and the orchestrator picks an undeclared
+   step, Runtime raises the existing IllegalTransitionError (do not catch or
+   reinterpret it).
+ - Jumping to a name not in the flow still raises GotoTargetError from core.py.
+
+ Pattern checks
+ - forbid reports file + line + rule; require reports a file lacking the
+   pattern; clean files pass through unchanged; a missing file is a violation;
+   a rule whose glob matches nothing produces no violation; files_provider
+   overrides the self-reported list (a file the agent did not report is still
+   checked).
+ - The returned Goto payload has "task", "feedback" and "violations".
+ - Full loop: Flow [handoff step (fake waiter) -> pattern check step] where the
+   first artifact violates a forbid rule. The check sends it back; the second
+   packet.md contains the exact violation text; the second artifact is clean;
+   the flow completes. Assert the trace shows the loop-back and that the
+   second visit used a different packet_id.
+ - Three consecutive loop-backs do not nest: the third packet's task is still
+   the original task, not a task containing earlier payloads.
+
+EXAMPLE (run by hand, not part of the automated suite):
+harness/examples/ide_handoff_demo.py: a Flow of a handoff step followed by a
+pattern check step, wired with rules_files from
+harness/examples/context_bundling/*.md and two illustrative PatternRules (one
+forbid, one require, commented as examples of "conventions you want
+verified"). It uses an invoke_hint, prints the packet and artifact paths, and
+is meant to be run by a human who drops an artifact.json by hand and watches
+the loop.
+
+DOCS: add ONE section to harness/README.md describing this path honestly:
+opt-in import; works alongside normal agents in one Flow; guarantees delivery,
+sequencing and deterministic post-checks; does not guarantee the agent
+complied; what the checks verify and the per-flow business logic remain the
+caller's responsibility. No marketing language implying a no-code solution.
+
+EXPLICIT NON-GOALS (do not build these, however reasonable they seem
+mid-work):
+ - Any change to core.py, routing.py, governance.py, flow_loader.py,
+   harness/__init__.py, pyproject.toml, or any existing test.
+ - Any "paused for a human" versus "crashed" distinction in Runtime or the
+   trace (separate, later, higher-risk unit).
+ - Automatic opening or driving of Cursor or Copilot.
+ - cursor-sdk / CURSOR_API_KEY usage.
+ - New Pydantic schemas for any specific domain.
+ - First-class YAML support for handoff steps.
+ - Version bumps or publishing.
+
+DONE MEANS: the full existing suite plus the new tests pass, the actual
+pytest output is pasted, no existing file other than harness/README.md is
+modified, and `git status` shows only the new ide_handoff/ package, the new
+test file, the new example, and the README section.

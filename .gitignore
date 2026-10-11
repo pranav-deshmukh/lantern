@@ -1,0 +1,173 @@
+# ============================================================
+# Python
+# ============================================================
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+*.so
+
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# ============================================================
+# Node / JavaScript
+# ============================================================
+
+node_modules/
+.npm/
+.pnpm-store/
+.yarn/
+.yarn-cache/
+
+# Build output
+dist/
+build/
+out/
+.next/
+.nuxt/
+.cache/
+.parcel-cache/
+.turbo/
+
+# Coverage
+coverage/
+.nyc_output/
+
+# ============================================================
+# Environment / secrets
+# ============================================================
+
+.env
+.env.*
+!.env.example
+
+*.pem
+*.key
+
+# ============================================================
+# IDE / Editors
+# ============================================================
+
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# ============================================================
+# OS
+# ============================================================
+
+Thumbs.db
+.DS_Store
+Desktop.ini
+
+# ============================================================
+# Logs
+# ============================================================
+
+*.log
+logs/
+
+# ============================================================
+# Temporary files
+# ============================================================
+
+*.tmp
+*.temp
+*.bak
+*.swp
+
+# ============================================================
+# Lantern runtime / demo artifacts
+# ============================================================
+
+# Runtime traces
+*.jsonl
+
+# Checkpoints
+*.checkpoint
+*.checkpoint.json
+*.ckpt
+
+# Local runtime state
+.lantern/
+.runtime/
+
+# ============================================================
+# Test / generated artifacts
+# ============================================================
+
+.pytest_cache/
+test-results/
+playwright-report/
+
+# ============================================================
+# Local demo workspaces
+# ============================================================
+
+# Ignore installed dependencies and generated builds inside demos
+demos/**/node_modules/
+demos/**/dist/
+demos/**/build/
+demos/**/.next/
+
+# React migration generated artifacts
+demos/react_migration/traces/*
+!demos/react_migration/traces/.gitkeep
+
+# ============================================================
+# Local databases / generated data
+# ============================================================
+
+*.db
+*.sqlite
+*.sqlite3
+
+# ============================================================
+# Secrets / credentials
+# ============================================================
+
+*.secret
+credentials.json
+service-account.json

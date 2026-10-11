@@ -59,6 +59,30 @@ It also does not *enforce* that an agent follows injected rules/skills
 content — it guarantees the content was delivered and audits which version
 was used. Compliance is the agent/prompt's responsibility.
 
+## IDE handoff
+
+Lantern also has an opt-in file-based handoff path for human-operated IDE
+agents such as Cursor, Copilot, Claude Code, or Codex. It is not imported from
+the top-level package; use it explicitly when a flow step should be performed
+by a person driving an IDE:
+
+```python
+from harness import Flow, Runtime, Step
+from harness.ide_handoff import make_ide_handoff_step
+```
+
+An IDE handoff step writes a markdown packet under the configured workspace and
+waits for an `artifact.json` from the IDE user. It can sit in the same `Flow`
+as ordinary Python callables, API-backed agents, and deterministic verifier
+steps. The handoff path guarantees delivery, sequencing, stale-artifact
+protection, and an audit trail; it does not guarantee that the IDE agent read
+or obeyed the packet or bundled rules/skills.
+
+Use deterministic checks, such as `make_pattern_check_step`, after the handoff
+when compliance matters. Those checks inspect concrete outputs and can return
+`Goto` feedback to the handoff step. The file list, rule set, and business
+logic being verified remain the caller's responsibility.
+
 ## Learn more
 
 Full documentation, architecture notes, and real end-to-end demos (an
